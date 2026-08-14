@@ -1,0 +1,26 @@
+{
+  "$comment": "Safety allowlist (requirement 3.4). Enforced at a single chokepoint every action passes through, shared by discovery and replay. Enforcement lands in Phase 5; the contract is fixed here so nothing is written against a moving target.",
+  "version": 1,
+
+  "origins": ["http://localhost:3000", "http://127.0.0.1:3000"],
+
+  "routePatterns": [
+    "/",
+    "/login",
+    "/logout",
+    "/search",
+    "/member/:memberId",
+    "/member/:memberId/sub-account/new",
+    "/member/:memberId/sub-account/confirm"
+  ],
+
+  "deniedRoutePatterns": [
+    "/admin/**"
+  ],
+
+  "actionTypes": ["navigate", "click", "type", "select", "key", "wait"],
+
+  "$comment_denied": "/admin/** is the fault-injection control surface. Denying it to the agent is not decoration: an agent that could reach it could disable the very failure conditions the safety model exists to handle, or reconfigure the app out from under a replay. The control plane must be unreachable from the data plane.",
+
+  "$comment_actions": "Action types are allowlisted, not blocklisted. A new action kind is unusable until it is named here — the failure mode of a missed blocklist entry is silent permission, which is the wrong default in a regulated environment."
+}

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.log
+
+# Secrets never enter the repo. See .env.example for the variable names.
+.env
+.env.*
+!.env.example
+
+# Run scratch. Curated evidence under /evidence/ IS committed — it is a deliverable.
+/tmp/
+/runs/
+.DS_Store
+
+# Local working context for future sessions: the assignment brief and the
+# implementation plan. Deliberately not committed — the submission repo is public,
+# and republishing the company's take-home brief there would leak it to future
+# candidates. REPORT.md is where the reasoning belongs for reviewers.
+.agents/

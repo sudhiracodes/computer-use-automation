@@ -1,0 +1,35 @@
+{
+  "name": "computer-use-automation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LLM discovers a UI flow once; the recorded artifact replays deterministically as an agent-invocable capability.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "target-app": "tsx target-app/server.ts",
+    "cli": "tsx src/cli/index.ts",
+    "artifact:validate": "tsx src/cli/index.ts artifact validate",
+    "artifact:schema": "tsx src/cli/index.ts artifact schema",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "check": "npm run typecheck && npm run lint && npm run test"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.0.0",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^4.1.10"
+  }
+}
