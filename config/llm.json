@@ -1,0 +1,5 @@
+{
+  "provider": "gemini",
+  "model": "gemini-2.5-flash",
+  "baseUrl": "https://generativelanguage.googleapis.com/v1beta"
+}

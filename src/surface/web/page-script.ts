@@ -144,6 +144,14 @@ const __cuaCandidates = (root, role) => {
   return out;
 };
 
+const __cuaScopeHint = (el) => {
+  const row = el.closest && el.closest("tr");
+  if (!row) return null;
+  const text = __cuaText(row);
+  if (!text || text === __cuaText(el)) return null;
+  return { kind: "table_row", text };
+};
+
 /*
  * Scope resolution, and the reason it exists.
  *
@@ -241,6 +249,8 @@ for (let i = 0; i < nodes.length; i++) {
     enabled: !el.disabled,
     bounds: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
   };
+  const scopeHint = __cuaScopeHint(el);
+  if (scopeHint) entry.scopeHint = scopeHint;
   if (typeof el.value === "string") entry.value = el.value;
   if (typeof el.checked === "boolean") entry.checked = el.checked;
   out.push(entry);

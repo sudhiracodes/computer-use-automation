@@ -35,6 +35,11 @@ export interface InventoryElement {
   framePath: string[];
   enabled: boolean;
   checked?: boolean;
+  /**
+   * Deterministic descriptor hint from the adapter, not the model. Discovery uses
+   * this when converting a chosen inventory id into a reusable locator.
+   */
+  scopeHint?: { kind: "table_row"; text: string };
   /** Present only to render annotated screenshots; never recorded in an artifact. */
   bounds?: { x: number; y: number; width: number; height: number };
 }
