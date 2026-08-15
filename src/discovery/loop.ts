@@ -7,6 +7,11 @@ import {
   type DiscoveryEvidenceRef,
 } from "../evidence/discovery-recorder.js";
 import type { LLMMessage, LLMProvider } from "../llm/provider.js";
+import {
+  evaluateActionPolicy,
+  inputSensitivityFromArtifact,
+  type PolicyContext,
+} from "../policy/index.js";
 import type { InventoryElement, Observation, SurfaceAdapter } from "../surface/adapter.js";
 import { buildDiscoveredArtifact, type RecordedDiscoveryAction } from "./recorder.js";
 import { actionKindOf, discoveryToolDefs, DiscoveryToolCall } from "./tools.js";
@@ -19,6 +24,7 @@ export interface DiscoveryOptions {
   inputs: Readonly<Record<string, string>>;
   maxSteps?: number;
   evidence?: DiscoveryEvidenceOptions;
+  policy?: PolicyContext;
 }
 
 export type DiscoveryResult =
@@ -41,6 +47,15 @@ export async function runDiscovery(options: DiscoveryOptions): Promise<Discovery
     provider: options.provider.id,
     model: options.provider.model,
   });
+
+  const navigateToEntry = { kind: "navigate" as const, url: { kind: "literal" as const, value: options.template.target.entryUrl } };
+  const navigationPolicyError = evaluateDiscoveryActionPolicy(
+    options.policy,
+    options.template,
+    navigateToEntry,
+    options.inputs,
+  );
+  if (navigationPolicyError) return failDiscovery(evidence, navigationPolicyError);
 
   await options.adapter.navigate(options.template.target.entryUrl);
   const initialObservation = await options.adapter.observe();
@@ -128,6 +143,15 @@ export async function runDiscovery(options: DiscoveryOptions): Promise<Discovery
 
     const before = observation;
     const action = actionFromTool(call, before);
+    const policyError = evaluateDiscoveryActionPolicy(
+      options.policy,
+      options.template,
+      action,
+      options.inputs,
+      before.url,
+    );
+    if (policyError) return failDiscovery(evidence, policyError);
+
     const actionError = await options.adapter.act(action, options.inputs).then(
       () => null,
       (error: unknown) => error instanceof Error ? error : new Error(String(error)),
@@ -282,6 +306,27 @@ function validateToolCall(
   }
 
   return null;
+}
+
+function evaluateDiscoveryActionPolicy(
+  policy: PolicyContext | undefined,
+  template: CapabilityArtifact,
+  action: ReturnType<typeof actionFromTool> | { kind: "navigate"; url: { kind: "literal"; value: string } },
+  inputs: Readonly<Record<string, string>>,
+  currentUrl?: string,
+): string | null {
+  if (!policy) return null;
+  const decision = evaluateActionPolicy(
+    {
+      ...policy,
+      inputSensitivity: inputSensitivityFromArtifact(template.inputs),
+    },
+    { action, inputs, currentUrl },
+  );
+  if (decision.status === "allowed") return null;
+  return decision.status === "requires_intervention"
+    ? "discovery action requires human approval"
+    : `discovery action blocked by policy: ${decision.reason}`;
 }
 
 function redactorFor(

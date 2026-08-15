@@ -14,9 +14,20 @@ import {
   type ReplayEvidenceRecorder,
   type ReplayEvidenceRef,
 } from "../evidence/replay-recorder.js";
+import { InterventionStore, SessionLease, type Intervention } from "../handoff/index.js";
+import {
+  ApprovalRequiredError,
+  evaluateActionPolicy,
+  inputSensitivityFromArtifact,
+  PolicyDeniedError,
+  redactDomSnapshot,
+  redactorForArtifact,
+  type PolicyContext,
+  type Redactor,
+} from "../policy/index.js";
 import type { SurfaceAdapter } from "../surface/adapter.js";
 
-export type ReplayStatus = "success" | "business_outcome" | "failed";
+export type ReplayStatus = "success" | "business_outcome" | "failed" | "intervention_required";
 
 export type ReplayErrorClass =
   | "LOCATOR_UNRESOLVED"
@@ -24,6 +35,8 @@ export type ReplayErrorClass =
   | "CHECKPOINT_FAILED"
   | "RECOVERY_EXHAUSTED"
   | "TIMEOUT"
+  | "POLICY_DENIED"
+  | "SESSION_LEASE"
   | "APP_ERROR"
   | "SESSION_EXPIRED"
   | "ADAPTER_ERROR";
@@ -64,13 +77,26 @@ export type ReplayResult =
         observed: string;
       };
       evidence: ReplayEvidenceRef;
+    }
+  | {
+      status: "intervention_required";
+      intervention: Intervention;
+      outputs: ReplayOutputs;
+      steps: ReplayStepLog[];
+      evidence: ReplayEvidenceRef;
     };
 
 export interface ReplayOptions {
   adapter: SurfaceAdapter;
   inputs: Readonly<Record<string, string>>;
+  initialOutputs?: ReplayOutputs;
   pollIntervalMs?: number;
   evidence?: ReplayEvidenceOptions;
+  policy?: PolicyContext;
+  lease?: SessionLease;
+  interventions?: InterventionStore;
+  resumeFromStepId?: string;
+  resumeInterventionId?: string;
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 100;
@@ -80,10 +106,20 @@ export async function replayArtifact(
   options: ReplayOptions,
 ): Promise<ReplayResult> {
   const steps: ReplayStepLog[] = [];
-  const outputs: ReplayOutputs = {};
+  const outputs: ReplayOutputs = { ...(options.initialOutputs ?? {}) };
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const evidence = createReplayEvidenceRecorder(options.evidence);
   const recoveryAttempts = new Map<string, number>();
+  const redactor = redactorForArtifact(artifact, options.inputs);
+  const lease = options.lease ?? new SessionLease();
+  const interventions = options.interventions ?? new InterventionStore();
+  const resumeIndex = options.resumeFromStepId
+    ? artifact.steps.findIndex((step) => step.id === options.resumeFromStepId)
+    : -1;
+
+  if (options.resumeFromStepId && resumeIndex === -1) {
+    throw new Error(`cannot resume from unknown step "${options.resumeFromStepId}"`);
+  }
 
   await evidence.record({
     type: "run_started",
@@ -93,7 +129,9 @@ export async function replayArtifact(
 
   await collectVisibleOutputs(artifact, options.adapter, options.inputs, outputs, evidence);
 
-  for (const step of artifact.steps) {
+  for (const [index, step] of artifact.steps.entries()) {
+    if (resumeIndex > -1 && index < resumeIndex) continue;
+
     try {
       await evidence.record({
         type: "step_started",
@@ -101,7 +139,66 @@ export async function replayArtifact(
         action: step.action.kind,
         intent: step.intent,
       });
-      await options.adapter.act(step.action, options.inputs);
+
+      if (resumeIndex === index) {
+        await recordHandoffResumeEvidence(
+          options.adapter,
+          evidence,
+          interventions,
+          step,
+          options.resumeInterventionId,
+        );
+
+        if (!step.postcondition) {
+          steps.push(stepLog(step, "failed"));
+          return failWithEvidence(options.adapter, outputs, steps, evidence, {
+            class: "CHECKPOINT_FAILED",
+            stepId: step.id,
+            expected: "resumed step to have a checkpoint",
+            observed: "resume requested for a step with no postcondition",
+          }, redactor);
+        }
+        const rechecked = await waitForCondition(
+          options.adapter,
+          step.postcondition,
+          options.inputs,
+          step.timeoutMs,
+          pollIntervalMs,
+        );
+        await evidence.record({ type: "resume_rechecked", stepId: step.id, checkpointSatisfied: rechecked });
+        if (!rechecked) {
+          steps.push(stepLog(step, "failed"));
+          return failWithEvidence(options.adapter, outputs, steps, evidence, {
+            class: "CHECKPOINT_FAILED",
+            stepId: step.id,
+            expected: describeCondition(step.postcondition),
+            observed: "checkpoint was false when control returned from human handoff",
+          }, redactor);
+        }
+      } else {
+        const actionResult = await actWithPolicy({
+          artifact,
+          adapter: options.adapter,
+          inputs: options.inputs,
+          action: step.action,
+          step,
+          policy: options.policy,
+          lease,
+          interventions,
+          evidence,
+        });
+        if (actionResult.kind === "intervention_required") {
+          steps.push(stepLog(step, "failed"));
+          await evidence.record({ type: "run_finished", status: "intervention_required" });
+          return {
+            status: "intervention_required",
+            intervention: actionResult.intervention,
+            outputs,
+            steps,
+            evidence: evidence.ref,
+          };
+        }
+      }
       await collectVisibleOutputs(artifact, options.adapter, options.inputs, outputs, evidence);
 
       if (step.postcondition) {
@@ -130,10 +227,13 @@ export async function replayArtifact(
             pollIntervalMs,
             outputs,
             artifact,
+            options.policy,
+            lease,
+            interventions,
           );
           if (recoveryFailure) {
             steps.push(stepLog(step, "failed"));
-            return failWithEvidence(options.adapter, outputs, steps, evidence, recoveryFailure);
+            return failWithEvidence(options.adapter, outputs, steps, evidence, recoveryFailure, redactor);
           }
 
           const reachedAfterRecovery = await waitForCondition(
@@ -151,7 +251,7 @@ export async function replayArtifact(
               stepId: step.id,
               expected: describeCondition(step.postcondition),
               observed: "condition was still false after recovery",
-            });
+            }, redactor);
           }
         }
 
@@ -163,7 +263,7 @@ export async function replayArtifact(
             stepId: step.id,
             expected: describeCondition(step.postcondition),
             observed: "condition was still false at the step deadline",
-          });
+          }, redactor);
         }
         await collectVisibleOutputs(artifact, options.adapter, options.inputs, outputs, evidence);
       } else {
@@ -183,10 +283,13 @@ export async function replayArtifact(
           pollIntervalMs,
           outputs,
           artifact,
+          options.policy,
+          lease,
+          interventions,
         );
         if (recoveryFailure) {
           steps.push(stepLog(step, "failed"));
-          return failWithEvidence(options.adapter, outputs, steps, evidence, recoveryFailure);
+          return failWithEvidence(options.adapter, outputs, steps, evidence, recoveryFailure, redactor);
         }
       }
 
@@ -199,7 +302,7 @@ export async function replayArtifact(
         stepId: step.id,
         expected: describeAction(step.action),
         observed: error instanceof Error ? error.message : String(error),
-      });
+      }, redactor);
     }
   }
 
@@ -219,7 +322,7 @@ export async function replayArtifact(
       stepId: "(successCondition)",
       expected: describeCondition(artifact.successCondition),
       observed: "success condition was still false after all steps completed",
-    });
+    }, redactor);
   }
 
   const missingOutput = Object.keys(artifact.outputs).find((name) => outputs[name] === undefined);
@@ -229,7 +332,7 @@ export async function replayArtifact(
       stepId: "(outputs)",
       expected: `extract output "${missingOutput}"`,
       observed: "declared output was not visible on any replayed screen",
-    });
+    }, redactor);
   }
 
   await evidence.record({ type: "run_finished", status: "success" });
@@ -340,6 +443,9 @@ async function runApplicableRecoveries(
   pollIntervalMs: number,
   outputs: ReplayOutputs,
   artifact: CapabilityArtifact,
+  policy: PolicyContext | undefined,
+  lease: SessionLease,
+  interventions: InterventionStore,
 ): Promise<FailureInput | null> {
   for (const recovery of recoveries) {
     if (!(await adapter.check(recovery.when, inputs))) continue;
@@ -364,7 +470,25 @@ async function runApplicableRecoveries(
     });
 
     for (const action of recovery.do) {
-      await adapter.act(action, inputs);
+      const result = await actWithPolicy({
+        artifact,
+        adapter,
+        inputs,
+        action,
+        step,
+        policy,
+        lease,
+        interventions,
+        evidence,
+      });
+      if (result.kind === "intervention_required") {
+        return {
+          class: "POLICY_DENIED",
+          stepId: step.id,
+          expected: "recovery action to run without human intervention",
+          observed: result.intervention.reason,
+        };
+      }
     }
 
     await waitUntilFalse(adapter, recovery.when, inputs, 2_000, pollIntervalMs);
@@ -443,6 +567,8 @@ function parseRaw(parse: OutputField["extraction"]["parse"], raw: string): strin
 
 function classifyError(error: unknown): ReplayErrorClass {
   if (!(error instanceof Error)) return "ADAPTER_ERROR";
+  if (error instanceof PolicyDeniedError || error instanceof ApprovalRequiredError) return "POLICY_DENIED";
+  if (error.name === "SessionLeaseError") return "SESSION_LEASE";
   if (error.name === "LocatorUnresolvedError" || error.name === "FrameNotFoundError") {
     return "LOCATOR_UNRESOLVED";
   }
@@ -490,15 +616,21 @@ async function failWithEvidence(
   steps: ReplayStepLog[],
   evidence: ReplayEvidenceRecorder,
   error: FailureInput,
+  redactor: Redactor = (value) => value,
 ): Promise<ReplayResult> {
   const snapshot = await adapter.snapshot().catch(() => null);
-  const snapshotPaths = snapshot ? await evidence.captureFailureSnapshot(snapshot) : {};
+  const snapshotPaths = snapshot
+    ? await evidence.captureFailureSnapshot({
+        screenshot: snapshot.screenshot,
+        domSnapshot: redactDomSnapshot(snapshot.domSnapshot, redactor),
+      })
+    : {};
   await evidence.record({
     type: "failure",
     stepId: error.stepId,
     class: error.class,
-    expected: error.expected,
-    observed: error.observed,
+    expected: redactor(error.expected),
+    observed: redactor(error.observed),
     ...snapshotPaths,
   });
   await evidence.record({ type: "run_finished", status: "failed" });
@@ -509,11 +641,111 @@ async function failWithEvidence(
     error: {
       class: error.class,
       stepId: error.stepId,
-      expected: error.expected,
-      observed: error.observed,
+      expected: redactor(error.expected),
+      observed: redactor(error.observed),
     },
     evidence: evidence.ref,
   };
+}
+
+type ActWithPolicyResult = { kind: "acted" } | { kind: "intervention_required"; intervention: Intervention };
+
+async function actWithPolicy(options: {
+  artifact: CapabilityArtifact;
+  adapter: SurfaceAdapter;
+  inputs: Readonly<Record<string, string>>;
+  action: Action;
+  step: Step;
+  policy?: PolicyContext | undefined;
+  lease: SessionLease;
+  interventions: InterventionStore;
+  evidence: ReplayEvidenceRecorder;
+}): Promise<ActWithPolicyResult> {
+  options.lease.assertAgentControl();
+
+  if (options.policy) {
+    const currentUrl = options.action.kind === "navigate"
+      ? undefined
+      : (await options.adapter.observe().catch(() => null))?.url;
+    const decision = evaluateActionPolicy(
+      {
+        ...options.policy,
+        inputSensitivity: inputSensitivityFromArtifact(options.artifact.inputs),
+      },
+      {
+        action: options.action,
+        inputs: options.inputs,
+        currentUrl,
+        declaredRisk: options.step.risk,
+      },
+    );
+
+    if (decision.status === "denied") {
+      throw new PolicyDeniedError(decision.reason);
+    }
+
+    if (decision.status === "requires_intervention") {
+      const lease = options.lease.requestHuman(decision.reason);
+      const intervention = options.interventions.create({
+        capabilityId: options.artifact.id,
+        runId: options.evidence.ref.runId,
+        stepId: options.step.id,
+        reason: decision.reason,
+        ...(currentUrl ? { url: currentUrl } : {}),
+        lease,
+      });
+      await options.evidence.record({
+        type: "intervention_requested",
+        interventionId: intervention.id,
+        stepId: options.step.id,
+        reason: decision.reason,
+        leaseOwner: lease.owner,
+        ...(currentUrl ? { url: currentUrl } : {}),
+      });
+      return { kind: "intervention_required", intervention };
+    }
+  }
+
+  await options.adapter.act(options.action, options.inputs);
+  return { kind: "acted" };
+}
+
+async function recordHandoffResumeEvidence(
+  adapter: SurfaceAdapter,
+  evidence: ReplayEvidenceRecorder,
+  interventions: InterventionStore,
+  step: Step,
+  explicitInterventionId?: string,
+): Promise<void> {
+  const intervention = explicitInterventionId
+    ? interventions.get(explicitInterventionId)
+    : interventions.list().findLast((candidate) => candidate.stepId === step.id);
+  if (!intervention) return;
+
+  const observation = await adapter.observe().catch(() => null);
+  const returnedUrl = observation?.url ?? "";
+
+  await evidence.record({
+    type: "operator_took_control",
+    interventionId: intervention.id,
+    stepId: step.id,
+    leaseOwner: "human",
+    ...(intervention.url ? { url: intervention.url } : {}),
+  });
+  await evidence.record({
+    type: "operator_navigation_observed",
+    interventionId: intervention.id,
+    ...(intervention.url ? { fromUrl: intervention.url } : {}),
+    toUrl: returnedUrl,
+    changed: intervention.url !== undefined && intervention.url !== returnedUrl,
+  });
+  await evidence.record({
+    type: "operator_returned_control",
+    interventionId: intervention.id,
+    stepId: step.id,
+    leaseOwner: "agent",
+    url: returnedUrl,
+  });
 }
 
 function stepLog(step: Step, status: ReplayStepLog["status"]): ReplayStepLog {

@@ -8,17 +8,21 @@
     "/",
     "/login",
     "/logout",
-    "/search",
-    "/member/:memberId",
-    "/member/:memberId/sub-account/new",
-    "/member/:memberId/sub-account/confirm"
+    "/console",
+    "/console/nav",
+    "/console/search",
+    "/console/member/:memberId",
+    "/console/member/:memberId/sub-account/new",
+    "/console/member/:memberId/sub-account/review",
+    "/console/member/:memberId/sub-account/confirm"
   ],
 
   "deniedRoutePatterns": [
+    "/admin",
     "/admin/**"
   ],
 
-  "actionTypes": ["navigate", "click", "type", "select", "key", "wait"],
+  "actionTypes": ["navigate", "click", "type", "select", "check", "key", "wait_for"],
 
   "$comment_denied": "/admin/** is the fault-injection control surface. Denying it to the agent is not decoration: an agent that could reach it could disable the very failure conditions the safety model exists to handle, or reconfigure the app out from under a replay. The control plane must be unreachable from the data plane.",
 

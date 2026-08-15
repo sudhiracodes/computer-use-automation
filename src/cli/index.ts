@@ -10,6 +10,7 @@
  */
 
 import { artifactJsonSchema, capabilityContract, loadArtifact } from "../artifact/index.js";
+import { loadAllowlistConfig, inputSensitivityFromArtifact } from "../policy/index.js";
 import { replayArtifact } from "../replay/index.js";
 import { PlaywrightWebAdapter } from "../surface/web/playwright-adapter.js";
 
@@ -26,6 +27,7 @@ Replay options:
   --input name=value          Bind an artifact input. Repeatable.
   --evidence-dir path         Persist replay JSONL and failure artifacts under path.
   --run-id id                 Stable evidence run id. Requires --evidence-dir.
+  --approval-token token      Permit irreversible steps after explicit approval.
   --headful                   Show the browser instead of running headless.
 `.trim();
 
@@ -119,6 +121,11 @@ async function replay(path: string | undefined, args: string[]): Promise<number>
     const result = await replayArtifact(artifact, {
       adapter,
       inputs,
+      policy: {
+        allowlist: await loadAllowlistConfig(artifact.target.allowlistRef),
+        inputSensitivity: inputSensitivityFromArtifact(artifact.inputs),
+        ...(parsed.approvalToken ? { approvalToken: parsed.approvalToken } : {}),
+      },
       ...(parsed.evidenceDir
         ? {
             evidence: {
@@ -136,7 +143,14 @@ async function replay(path: string | undefined, args: string[]): Promise<number>
 }
 
 type ReplayArgs =
-  | { ok: true; inputs: Record<string, string>; headless: boolean; evidenceDir?: string; runId?: string }
+  | {
+      ok: true;
+      inputs: Record<string, string>;
+      headless: boolean;
+      evidenceDir?: string;
+      runId?: string;
+      approvalToken?: string;
+    }
   | { ok: false; message: string };
 
 function parseReplayArgs(args: string[]): ReplayArgs {
@@ -144,6 +158,7 @@ function parseReplayArgs(args: string[]): ReplayArgs {
   let headless = true;
   let evidenceDir: string | undefined;
   let runId: string | undefined;
+  let approvalToken: string | undefined;
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -171,6 +186,17 @@ function parseReplayArgs(args: string[]): ReplayArgs {
     if (arg?.startsWith("--run-id=")) {
       runId = arg.slice("--run-id=".length);
       if (!runId) return { ok: false, message: "--run-id requires an id" };
+      continue;
+    }
+    if (arg === "--approval-token") {
+      approvalToken = args[i + 1];
+      if (!approvalToken) return { ok: false, message: "--approval-token requires a token" };
+      i += 1;
+      continue;
+    }
+    if (arg?.startsWith("--approval-token=")) {
+      approvalToken = arg.slice("--approval-token=".length);
+      if (!approvalToken) return { ok: false, message: "--approval-token requires a token" };
       continue;
     }
     if (arg === "--input") {
@@ -201,6 +227,7 @@ function parseReplayArgs(args: string[]): ReplayArgs {
     headless,
     ...(evidenceDir ? { evidenceDir } : {}),
     ...(runId ? { runId } : {}),
+    ...(approvalToken ? { approvalToken } : {}),
   };
 }
 

@@ -62,6 +62,50 @@ export type ReplayEvidenceEvent =
       at: string;
     }
   | {
+      type: "intervention_requested";
+      runId: string;
+      interventionId: string;
+      stepId: string;
+      reason: string;
+      leaseOwner: string;
+      url?: string;
+      at: string;
+    }
+  | {
+      type: "operator_took_control";
+      runId: string;
+      interventionId: string;
+      stepId: string;
+      leaseOwner: "human";
+      url?: string;
+      at: string;
+    }
+  | {
+      type: "operator_navigation_observed";
+      runId: string;
+      interventionId: string;
+      fromUrl?: string;
+      toUrl: string;
+      changed: boolean;
+      at: string;
+    }
+  | {
+      type: "operator_returned_control";
+      runId: string;
+      interventionId: string;
+      stepId: string;
+      leaseOwner: "agent";
+      url: string;
+      at: string;
+    }
+  | {
+      type: "resume_rechecked";
+      runId: string;
+      stepId: string;
+      checkpointSatisfied: boolean;
+      at: string;
+    }
+  | {
       type: "failure";
       runId: string;
       stepId: string;
