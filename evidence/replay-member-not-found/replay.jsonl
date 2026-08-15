@@ -1,0 +1,14 @@
+{"type":"run_started","artifactId":"open-savings-sub-account","artifactVersion":"1.0.0","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.327Z"}
+{"type":"step_started","stepId":"open-signon","action":"navigate","intent":"Load the MERIDIAN Core sign-on page.","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.328Z"}
+{"type":"step_completed","stepId":"open-signon","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.379Z"}
+{"type":"step_started","stepId":"enter-operator-id","action":"type","intent":"Type the operator ID into the sign-on form.","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.379Z"}
+{"type":"step_completed","stepId":"enter-operator-id","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.431Z"}
+{"type":"step_started","stepId":"enter-operator-password","action":"type","intent":"Type the operator password. The value is bound at invocation and is redacted everywhere it would otherwise be recorded.","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.431Z"}
+{"type":"step_completed","stepId":"enter-operator-password","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.469Z"}
+{"type":"step_started","stepId":"submit-signon","action":"click","intent":"Submit the sign-on form and wait for the console to load its content frame.","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.469Z"}
+{"type":"step_completed","stepId":"submit-signon","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.592Z"}
+{"type":"step_started","stepId":"enter-member-id","action":"type","intent":"Enter the member number in the search box. This control has no accessible name in the markup; the name above is derived from the adjacent label cell.","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.592Z"}
+{"type":"step_completed","stepId":"enter-member-id","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.623Z"}
+{"type":"step_started","stepId":"run-search","action":"click","intent":"Run the member search and wait for a result row for this specific member.","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.623Z"}
+{"type":"business_outcome","stepId":"run-search","code":"MEMBER_NOT_FOUND","message":"No member exists with the supplied member number.","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.677Z"}
+{"type":"run_finished","status":"business_outcome","runId":"replay-member-not-found","at":"2026-08-15T21:48:57.678Z"}

@@ -9,7 +9,9 @@
  * Phases 4 and 2 respectively.
  */
 
-import { artifactJsonSchema, capabilityContract, loadArtifact } from "../artifact/index.js";
+import { artifactJsonSchema, capabilityContract, loadArtifact, saveArtifact } from "../artifact/index.js";
+import { runDiscovery } from "../discovery/index.js";
+import { createLLMProvider } from "../llm/factory.js";
 import { loadAllowlistConfig, inputSensitivityFromArtifact } from "../policy/index.js";
 import { replayArtifact } from "../replay/index.js";
 import { PlaywrightWebAdapter } from "../surface/web/playwright-adapter.js";
@@ -21,13 +23,25 @@ Commands:
   artifact validate <path>   Validate a capability artifact and report problems
   artifact contract <path>   Print the agent-facing calling contract for an artifact
   artifact schema            Print JSON Schema for the artifact format itself
+  discover <template> [options]
+                              Run LLM discovery from a goal and save the artifact
   replay <path> [options]     Replay an artifact deterministically
+
+Discovery options:
+  --goal text                 Natural-language goal for the discovery agent.
+  --output path               Where to write the discovered artifact JSON.
+  --input name=value          Bind an artifact input. Repeatable.
+  --evidence-dir path         Persist replay JSONL and failure artifacts under path.
+  --run-id id                 Stable evidence run id. Requires --evidence-dir.
+  --approval-token token      Permit irreversible steps after explicit approval.
+  --headful                   Show the browser instead of running headless.
 
 Replay options:
   --input name=value          Bind an artifact input. Repeatable.
   --evidence-dir path         Persist replay JSONL and failure artifacts under path.
   --run-id id                 Stable evidence run id. Requires --evidence-dir.
   --approval-token token      Permit irreversible steps after explicit approval.
+  --resume-from-step id       Resume after handoff by re-checking this step.
   --headful                   Show the browser instead of running headless.
 `.trim();
 
@@ -41,6 +55,10 @@ async function main(argv: string[]): Promise<number> {
 
   if (group === "replay") {
     return replay(command, rest);
+  }
+
+  if (group === "discover") {
+    return discover(command, rest);
   }
 
   if (group !== "artifact") {
@@ -59,6 +77,58 @@ async function main(argv: string[]): Promise<number> {
     default:
       console.error(`Unknown artifact command "${command ?? ""}".\n\n${USAGE}`);
       return 2;
+  }
+}
+
+async function discover(path: string | undefined, args: string[]): Promise<number> {
+  if (!path) {
+    console.error("discover requires a template artifact path");
+    return 2;
+  }
+
+  const parsed = parseDiscoverArgs(args);
+  if (!parsed.ok) {
+    console.error(parsed.message);
+    return 2;
+  }
+
+  const template = await loadArtifact(path);
+  const inputs = bindInputs(template, parsed.inputs);
+  const adapter = await PlaywrightWebAdapter.launch({ headless: parsed.headless });
+  const provider = await createLLMProvider();
+
+  try {
+    const result = await runDiscovery({
+      goal: parsed.goal,
+      template,
+      provider,
+      adapter,
+      inputs,
+      policy: {
+        allowlist: await loadAllowlistConfig(template.target.allowlistRef),
+        inputSensitivity: inputSensitivityFromArtifact(template.inputs),
+        ...(parsed.approvalToken ? { approvalToken: parsed.approvalToken } : {}),
+      },
+      ...(parsed.evidenceDir
+        ? {
+            evidence: {
+              dir: parsed.evidenceDir,
+              ...(parsed.runId ? { runId: parsed.runId } : {}),
+            },
+          }
+        : {}),
+    });
+
+    if (result.status !== "success") {
+      console.log(JSON.stringify(result, null, 2));
+      return 1;
+    }
+
+    await saveArtifact(parsed.output, result.artifact);
+    console.log(JSON.stringify({ status: "success", artifactPath: parsed.output, evidence: result.evidence }, null, 2));
+    return 0;
+  } finally {
+    await adapter.dispose();
   }
 }
 
@@ -126,6 +196,7 @@ async function replay(path: string | undefined, args: string[]): Promise<number>
         inputSensitivity: inputSensitivityFromArtifact(artifact.inputs),
         ...(parsed.approvalToken ? { approvalToken: parsed.approvalToken } : {}),
       },
+      ...(parsed.resumeFromStepId ? { resumeFromStepId: parsed.resumeFromStepId } : {}),
       ...(parsed.evidenceDir
         ? {
             evidence: {
@@ -150,6 +221,7 @@ type ReplayArgs =
       evidenceDir?: string;
       runId?: string;
       approvalToken?: string;
+      resumeFromStepId?: string;
     }
   | { ok: false; message: string };
 
@@ -159,6 +231,7 @@ function parseReplayArgs(args: string[]): ReplayArgs {
   let evidenceDir: string | undefined;
   let runId: string | undefined;
   let approvalToken: string | undefined;
+  let resumeFromStepId: string | undefined;
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -199,6 +272,17 @@ function parseReplayArgs(args: string[]): ReplayArgs {
       if (!approvalToken) return { ok: false, message: "--approval-token requires a token" };
       continue;
     }
+    if (arg === "--resume-from-step") {
+      resumeFromStepId = args[i + 1];
+      if (!resumeFromStepId) return { ok: false, message: "--resume-from-step requires a step id" };
+      i += 1;
+      continue;
+    }
+    if (arg?.startsWith("--resume-from-step=")) {
+      resumeFromStepId = arg.slice("--resume-from-step=".length);
+      if (!resumeFromStepId) return { ok: false, message: "--resume-from-step requires a step id" };
+      continue;
+    }
     if (arg === "--input") {
       const binding = args[i + 1];
       if (!binding) return { ok: false, message: "--input requires name=value" };
@@ -228,6 +312,71 @@ function parseReplayArgs(args: string[]): ReplayArgs {
     ...(evidenceDir ? { evidenceDir } : {}),
     ...(runId ? { runId } : {}),
     ...(approvalToken ? { approvalToken } : {}),
+    ...(resumeFromStepId ? { resumeFromStepId } : {}),
+  };
+}
+
+type DiscoverArgs =
+  | {
+      ok: true;
+      goal: string;
+      output: string;
+      inputs: Record<string, string>;
+      headless: boolean;
+      evidenceDir?: string;
+      runId?: string;
+      approvalToken?: string;
+    }
+  | { ok: false; message: string };
+
+function parseDiscoverArgs(args: string[]): DiscoverArgs {
+  let goal: string | undefined;
+  let output: string | undefined;
+  const sharedArgs: string[] = [];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === undefined) continue;
+    if (arg === "--goal") {
+      goal = args[i + 1];
+      if (!goal) return { ok: false, message: "--goal requires text" };
+      i += 1;
+      continue;
+    }
+    if (arg?.startsWith("--goal=")) {
+      goal = arg.slice("--goal=".length);
+      if (!goal) return { ok: false, message: "--goal requires text" };
+      continue;
+    }
+    if (arg === "--output") {
+      output = args[i + 1];
+      if (!output) return { ok: false, message: "--output requires a path" };
+      i += 1;
+      continue;
+    }
+    if (arg?.startsWith("--output=")) {
+      output = arg.slice("--output=".length);
+      if (!output) return { ok: false, message: "--output requires a path" };
+      continue;
+    }
+    sharedArgs.push(arg);
+  }
+
+  if (!goal) return { ok: false, message: "discover requires --goal" };
+  if (!output) return { ok: false, message: "discover requires --output" };
+
+  const replayArgs = parseReplayArgs(sharedArgs);
+  if (!replayArgs.ok) return replayArgs;
+
+  return {
+    ok: true,
+    goal,
+    output,
+    inputs: replayArgs.inputs,
+    headless: replayArgs.headless,
+    ...(replayArgs.evidenceDir ? { evidenceDir: replayArgs.evidenceDir } : {}),
+    ...(replayArgs.runId ? { runId: replayArgs.runId } : {}),
+    ...(replayArgs.approvalToken ? { approvalToken: replayArgs.approvalToken } : {}),
   };
 }
 

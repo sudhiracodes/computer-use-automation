@@ -1,0 +1,16 @@
+{"type":"run_started","artifactId":"open-savings-sub-account","artifactVersion":"1.0.0","runId":"replay-app-error","at":"2026-08-15T21:49:42.423Z"}
+{"type":"step_started","stepId":"open-signon","action":"navigate","intent":"Load the MERIDIAN Core sign-on page.","runId":"replay-app-error","at":"2026-08-15T21:49:42.424Z"}
+{"type":"step_completed","stepId":"open-signon","runId":"replay-app-error","at":"2026-08-15T21:49:42.492Z"}
+{"type":"step_started","stepId":"enter-operator-id","action":"type","intent":"Type the operator ID into the sign-on form.","runId":"replay-app-error","at":"2026-08-15T21:49:42.492Z"}
+{"type":"step_completed","stepId":"enter-operator-id","runId":"replay-app-error","at":"2026-08-15T21:49:42.543Z"}
+{"type":"step_started","stepId":"enter-operator-password","action":"type","intent":"Type the operator password. The value is bound at invocation and is redacted everywhere it would otherwise be recorded.","runId":"replay-app-error","at":"2026-08-15T21:49:42.544Z"}
+{"type":"step_completed","stepId":"enter-operator-password","runId":"replay-app-error","at":"2026-08-15T21:49:42.582Z"}
+{"type":"step_started","stepId":"submit-signon","action":"click","intent":"Submit the sign-on form and wait for the console to load its content frame.","runId":"replay-app-error","at":"2026-08-15T21:49:42.582Z"}
+{"type":"step_completed","stepId":"submit-signon","runId":"replay-app-error","at":"2026-08-15T21:49:42.768Z"}
+{"type":"step_started","stepId":"enter-member-id","action":"type","intent":"Enter the member number in the search box. This control has no accessible name in the markup; the name above is derived from the adjacent label cell.","runId":"replay-app-error","at":"2026-08-15T21:49:42.769Z"}
+{"type":"step_completed","stepId":"enter-member-id","runId":"replay-app-error","at":"2026-08-15T21:49:42.789Z"}
+{"type":"step_started","stepId":"run-search","action":"click","intent":"Run the member search and wait for a result row for this specific member.","runId":"replay-app-error","at":"2026-08-15T21:49:42.789Z"}
+{"type":"step_completed","stepId":"run-search","runId":"replay-app-error","at":"2026-08-15T21:49:42.851Z"}
+{"type":"step_started","stepId":"open-member-detail","action":"click","intent":"Open the member's detail screen. Every result row has a link named View, so the row is selected by the member number rather than by position.","runId":"replay-app-error","at":"2026-08-15T21:49:42.851Z"}
+{"type":"failure","stepId":"open-member-detail","class":"APP_ERROR","expected":"textbox named \"Savings Balance\" is present","observed":"condition was still false at the step deadline","screenshotPath":"evidence/replay-app-error/failure.png","domSnapshotPath":"evidence/replay-app-error/failure.html","runId":"replay-app-error","at":"2026-08-15T21:49:52.991Z"}
+{"type":"run_finished","status":"failed","runId":"replay-app-error","at":"2026-08-15T21:49:52.991Z"}

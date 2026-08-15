@@ -1,165 +1,175 @@
 # Computer-Use Automation System
 
-An LLM discovers how to complete a task in a legacy UI **once**. What it learned is
-recorded as a typed, versioned **capability artifact**. That artifact then replays
-**deterministically, with no model in the decision loop** — which is how a production
-AI agent invokes it: reliably, cheaply, and reviewably.
+An LLM discovers how to complete a task in a legacy UI once. The run is recorded as
+a typed, versioned capability artifact. Production execution then replays that
+artifact deterministically, with no model in the decision loop.
 
-> **Status: Phase 1 of 6 complete.** The capability contract and the target
-> application exist and are exercisable today. The surface adapter, replay engine,
-> discovery agent, safety layer, and handoff are the phases that follow — see
-> [Roadmap](#roadmap). `REPORT.md` lands in Phase 6.
+The target is a local synthetic credit-union back-office app, MERIDIAN Core. It is
+intentionally awkward in the ways legacy systems tend to be: iframe navigation,
+nested tables, generated element ids, inconsistent labels, no test ids, and runtime
+faults for business outcomes, recoveries, hard failures, and handoff.
 
-## Why this order
-
-The artifact schema was built first, and the next thing built against it is a
-**deterministic replay of a hand-authored artifact** — not the LLM recorder.
-
-That is deliberate. Build the recorder first and the contract silently becomes
-"whatever the recorder happened to emit." Building a consumer first forces the
-contract to be right on its own terms, and it means Phases 1–3 need no API key and no
-provider account, so the schema and locator strategy get debugged without model
-nondeterminism in the loop.
-
-It has already paid for itself: writing the example artifact against the real screens
-exposed four genuine gaps in the schema — see [What Phase 1
-found](#what-phase-1-found).
+All data and credentials are synthetic.
 
 ## Setup
 
-Requires Node 20+. No API key, provider account, or network access is needed for
-anything currently implemented.
+Requires Node 20+.
 
 ```bash
 npm install
+npm run check
 ```
 
-## Try it
-
-### The target application
-
-A stand-in for a credit-union back-office system, built to be **hostile in the ways
-that matter** — see [`target-app/render.ts`](target-app/render.ts) for the full list
-and the reasoning.
+Optional environment:
 
 ```bash
-npm run target-app       # http://localhost:3000
+cp .env.example .env
 ```
 
-Sign on with the credentials printed at startup, then walk:
-`Member Search → 100234 → View → Open Sub-Account → Continue → Confirm`.
-
-**All data is synthetic.** No real credentials, no real PII.
-
-### Induce the runtime failures
-
-The interesting failures in this domain are not layout drift — they are runtime
-conditions. Each of the four maps to one arm of the replay result contract:
-
-```
-http://localhost:3000/admin          arm/disarm faults, or use ?_fault=<kind>
-```
-
-| Fault | Result class it exercises | Reach it directly |
-|---|---|---|
-| `not_found` | business outcome — `MEMBER_NOT_FOUND` | search member `999999` (**no fault needed**) |
-| `unexpected_dialog` | recoverable — bounded interstitial | `/console/member/100234?_fault=unexpected_dialog` |
-| `app_error` | hard failure — stop and report | `/console/member/100234?_fault=app_error` |
-| `session_expired` | escalation — needs a human | `/console/member/100234?_fault=session_expired` |
-
-`/admin` is **denied to the agent** in [`config/allowlist.json`](config/allowlist.json).
-An agent that could reach it could disarm the very conditions the safety model exists
-to handle.
-
-### The capability artifact
+For real LLM discovery, set:
 
 ```bash
-# Validate — enforces cross-field invariants, not just shape
-npm run cli -- artifact validate "artifacts/open-savings-sub-account@1.0.0.json"
+export LLM_API_KEY=...
+```
 
-# The agent-facing calling contract: typed args, typed results, business outcomes
-npm run cli -- artifact contract "artifacts/open-savings-sub-account@1.0.0.json"
+`config/llm.json` defaults to Gemini:
 
-# JSON Schema for the artifact format itself (editor/CI aid)
+```json
+{
+  "provider": "gemini",
+  "model": "gemini-2.5-flash",
+  "baseUrl": "https://generativelanguage.googleapis.com/v1beta"
+}
+```
+
+Without a provider key, the deterministic replay path, artifact validation, target
+app, safety gate, handoff tests, and offline evidence replay all run locally.
+
+## Run The Target App
+
+In one terminal:
+
+```bash
+npm run target-app
+```
+
+Open `http://localhost:3000` and sign on with the synthetic defaults:
+
+```text
+teller01 / change-me-locally
+```
+
+The happy path is:
+
+`Sign On -> Member Search -> 100234 -> View -> Open Sub-Account -> Continue -> Confirm`.
+
+Fault control is at `http://localhost:3000/admin`. That route is denied to the
+agent in `config/allowlist.json`.
+
+## Demo Path
+
+### 1. Run A Real Gemini Discovery
+
+With the target app running and `LLM_API_KEY` set:
+
+```bash
+npm run cli -- discover artifacts/open-savings-sub-account@1.0.0.json \
+  --goal "Open a Holiday Club savings sub-account for member 100234 with a 25.00 initial deposit." \
+  --input memberId=100234 \
+  --approval-token approved-by-operator \
+  --evidence-dir evidence \
+  --run-id discovery-gemini \
+  --output evidence/artifacts/open-savings-sub-account.discovered.json
+```
+
+The model sees a numbered inventory of accessible controls and selects inventory
+element ids only. Deterministic code constructs the replay locators and writes the
+artifact.
+
+### 2. Replay The Resulting Artifact
+
+```bash
+npm run cli -- replay evidence/artifacts/open-savings-sub-account.discovered.json \
+  --input memberId=100234 \
+  --approval-token approved-by-operator \
+  --evidence-dir evidence \
+  --run-id replay-discovered
+```
+
+Replay uses the artifact only. It does not import or call any LLM/provider code.
+
+### No-Key Replay Demo
+
+This uses the checked-in hand-authored artifact and needs no provider key:
+
+```bash
+npm run cli -- replay artifacts/open-savings-sub-account@1.0.0.json \
+  --input memberId=100234 \
+  --approval-token approved-by-operator \
+  --evidence-dir evidence \
+  --run-id replay-success
+```
+
+Business outcome demo:
+
+```bash
+npm run cli -- replay artifacts/open-savings-sub-account@1.0.0.json \
+  --input memberId=999999 \
+  --evidence-dir evidence \
+  --run-id replay-member-not-found
+```
+
+Hard-failure demo:
+
+```bash
+curl -s -X POST -d kind=app_error -d mode=once http://localhost:3000/admin/fault
+npm run cli -- replay artifacts/open-savings-sub-account@1.0.0.json \
+  --input memberId=100234 \
+  --approval-token approved-by-operator \
+  --evidence-dir evidence \
+  --run-id replay-app-error
+```
+
+## Artifact Commands
+
+```bash
+npm run cli -- artifact validate artifacts/open-savings-sub-account@1.0.0.json
+npm run cli -- artifact contract artifacts/open-savings-sub-account@1.0.0.json
 npm run cli -- artifact schema
 ```
 
-### Checks
+## Evidence
 
-```bash
-npm run check     # typecheck + lint + tests
+`/evidence/` is the final demonstration area. It contains a saved example artifact
+and replay logs produced by the CLI. A final submission should also include the
+real Gemini discovery log generated by the command above.
+
+Current generated replay evidence:
+
+```text
+evidence/artifacts/open-savings-sub-account@1.0.0.json
+evidence/replay-success/replay.jsonl
+evidence/replay-member-not-found/replay.jsonl
+evidence/replay-app-error/replay.jsonl
+evidence/replay-app-error/failure.html
+evidence/replay-app-error/failure.png
 ```
 
-## What Phase 1 found
+## Repository Layout
 
-Writing a real artifact against real screens changed the schema four times. Each fix
-is the kind that is cheap now and near-impossible to retrofit:
-
-1. **`LocatorScope.name` had to become parameterizable.** Every search-result row has
-   a link named "View". The row you want is selected by *data* — the member number, an
-   input. A literal would have pinned the artifact to one member and destroyed the
-   parameterization that makes it a capability. This produced a general rule: anything
-   matching **content** is parameterizable; anything describing **screen structure**
-   is not.
-2. **`click` on a checkbox is not idempotent**, so it is not deterministic under
-   retry — replay it twice and the box ends up wrong. Added a `check` action that
-   declares the desired end state and converges.
-3. **`nameSource`**, recording which rung of the accessible-name ladder produced a
-   name. The target names controls inconsistently on purpose (`aria-label`,
-   `<label for>`, `title`, and *nothing at all*). A control whose name used to come
-   from `adjacent-cell` and now comes from `label-for` means the app was edited — a
-   drift signal, and unrecoverable if not captured at record time.
-4. **Postconditions are required on screen-changing actions only.** Requiring one per
-   form field was ceremony that caught nothing; requiring one after every click and
-   navigation forbids the actual failure — assuming a click worked.
-
-## Design commitments already enforced in code
-
-Not aspirations — each is a test or a type that fails if the claim stops being true.
-
-- **No CSS selector or coordinate can be a primary locator.** The primary strategy is
-  structurally fixed to `semantic` (role + accessible name + scope + frame path).
-  An artifact targeting by selector *cannot be represented*. That vocabulary is also
-  what Windows UIA and macOS AX expose, which is what makes a desktop adapter a
-  future addition rather than a rewrite.
-- **A secret cannot reach a URL.** Validation rejects it; URLs reach access logs,
-  referrers, and history, where downstream redaction cannot help.
-- **Sensitive fields cannot carry examples.** Examples get committed to the repo.
-- **Business outcomes are first-class.** `MEMBER_NOT_FOUND` is a declared, detectable
-  result with a stable code that callers branch on — a different arm of the result
-  union from failure. Conflating those two is the mistake this domain punishes most.
-- **The LLM sits behind a port, and three ESLint boundaries enforce it** — including
-  that replay and the artifact schema have *no import path to a model at all*. The
-  tests in [`tests/import-boundary.test.ts`](tests/import-boundary.test.ts) run the
-  real config against violating code, because a config that contains a rule proves
-  nothing about whether it fires.
-- **Provenance cannot lie.** A hand-authored artifact must say so and must not name a
-  model; an LLM-discovered one must record which provider and model produced it.
-
-## Roadmap
-
-| Phase | Scope | State |
-|---|---|---|
-| 1 | Capability contract + hostile target app | **done** |
-| 2 | Surface adapter (a11y-tree inventory, scored resolver) + deterministic replay | next |
-| 3 | Error taxonomy, four-way result contract, evidence | |
-| 4 | `LLMProvider` port + discovery agent — the mandatory real LLM run | |
-| 5 | Allowlist, risk gating, redaction, `SessionLease` handoff | |
-| 6 | `README` completion + `REPORT.md` | |
-
-The LLM provider is swappable by config (`LLM_PROVIDER`, `LLM_MODEL`,
-`LLM_BASE_URL`) with no change outside `src/llm/`. Two adapters cover nearly
-everything: Gemini native, and one OpenAI-compatible adapter that serves Groq,
-OpenRouter, Together, DeepSeek, OpenAI, and local Ollama/vLLM. See
-[`.env.example`](.env.example).
-
-## Layout
-
-```
-config/allowlist.json   permitted origins, routes, action types; /admin denied
-src/artifact/           the capability contract — schema, invariants, agent-facing view
-src/cli/                operator CLI
-target-app/             the hostile mock: 5 screens, 4 faults, synthetic data
-artifacts/              capability store
-tests/                  invariant tests + boundary enforcement
+```text
+artifacts/              checked-in capability artifacts
+config/                 allowlist and LLM provider config
+evidence/               final demonstration logs and copied artifacts
+src/artifact/           Zod schema, validation, contract projection
+src/cli/                artifact, discovery, and replay CLI
+src/discovery/          observe -> decide -> act loop and deterministic recorder
+src/evidence/           JSONL evidence recorders
+src/handoff/            SessionLease and intervention records
+src/llm/                provider-agnostic LLM port and Gemini adapter
+src/policy/             allowlist and redaction
+src/replay/             deterministic replay executor
+src/surface/            SurfaceAdapter and Playwright web adapter
+target-app/             synthetic legacy banking target
+tests/                  schema, replay, discovery, policy, handoff tests
 ```
