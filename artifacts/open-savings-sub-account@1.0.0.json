@@ -84,7 +84,8 @@
           "name": "",
           "scope": {
             "kind": "table_row",
-            "name": { "kind": "literal", "value": "New Sub-Account Number" }
+            "name": { "kind": "literal", "value": "New Sub-Account Number" },
+            "nameMatch": "contains"
           },
           "ordinal": 1,
           "framePath": ["content"]
@@ -209,7 +210,8 @@
           "nameSource": "native",
           "scope": {
             "kind": "table_row",
-            "name": { "kind": "param", "param": "memberId" }
+            "name": { "kind": "param", "param": "memberId" },
+            "nameMatch": "contains"
           },
           "framePath": ["content"]
         }
@@ -228,7 +230,8 @@
           "nameSource": "native",
           "scope": {
             "kind": "table_row",
-            "name": { "kind": "param", "param": "memberId" }
+            "name": { "kind": "param", "param": "memberId" },
+            "nameMatch": "contains"
           },
           "framePath": ["content"]
         }
@@ -386,7 +389,8 @@
       "name": "",
       "scope": {
         "kind": "table_row",
-        "name": { "kind": "literal", "value": "New Sub-Account Number" }
+        "name": { "kind": "literal", "value": "New Sub-Account Number" },
+        "nameMatch": "contains"
       },
       "ordinal": 1,
       "framePath": ["content"]
