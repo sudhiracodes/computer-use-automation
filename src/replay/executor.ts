@@ -7,16 +7,25 @@
  */
 
 import type { Action, Condition } from "../artifact/locator.js";
-import type { CapabilityArtifact, OutputField, Step } from "../artifact/schema.js";
+import type { CapabilityArtifact, KnownOutcome, OutputField, Recovery, Step } from "../artifact/schema.js";
+import {
+  createReplayEvidenceRecorder,
+  type ReplayEvidenceOptions,
+  type ReplayEvidenceRecorder,
+  type ReplayEvidenceRef,
+} from "../evidence/replay-recorder.js";
 import type { SurfaceAdapter } from "../surface/adapter.js";
 
-export type ReplayStatus = "success" | "failed";
+export type ReplayStatus = "success" | "business_outcome" | "failed";
 
 export type ReplayErrorClass =
   | "LOCATOR_UNRESOLVED"
   | "LOCATOR_AMBIGUOUS"
   | "CHECKPOINT_FAILED"
+  | "RECOVERY_EXHAUSTED"
   | "TIMEOUT"
+  | "APP_ERROR"
+  | "SESSION_EXPIRED"
   | "ADAPTER_ERROR";
 
 export type ReplayOutput = string | number | boolean;
@@ -34,6 +43,15 @@ export type ReplayResult =
       status: "success";
       outputs: ReplayOutputs;
       steps: ReplayStepLog[];
+      evidence: ReplayEvidenceRef;
+    }
+  | {
+      status: "business_outcome";
+      code: string;
+      detail: string;
+      outputs: ReplayOutputs;
+      steps: ReplayStepLog[];
+      evidence: ReplayEvidenceRef;
     }
   | {
       status: "failed";
@@ -45,12 +63,14 @@ export type ReplayResult =
         expected: string;
         observed: string;
       };
+      evidence: ReplayEvidenceRef;
     };
 
 export interface ReplayOptions {
   adapter: SurfaceAdapter;
   inputs: Readonly<Record<string, string>>;
   pollIntervalMs?: number;
+  evidence?: ReplayEvidenceOptions;
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 100;
@@ -62,47 +82,124 @@ export async function replayArtifact(
   const steps: ReplayStepLog[] = [];
   const outputs: ReplayOutputs = {};
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const evidence = createReplayEvidenceRecorder(options.evidence);
+  const recoveryAttempts = new Map<string, number>();
 
-  await collectVisibleOutputs(artifact, options.adapter, options.inputs, outputs);
+  await evidence.record({
+    type: "run_started",
+    artifactId: artifact.id,
+    artifactVersion: artifact.version,
+  });
+
+  await collectVisibleOutputs(artifact, options.adapter, options.inputs, outputs, evidence);
 
   for (const step of artifact.steps) {
     try {
+      await evidence.record({
+        type: "step_started",
+        stepId: step.id,
+        action: step.action.kind,
+        intent: step.intent,
+      });
       await options.adapter.act(step.action, options.inputs);
-      await collectVisibleOutputs(artifact, options.adapter, options.inputs, outputs);
+      await collectVisibleOutputs(artifact, options.adapter, options.inputs, outputs, evidence);
 
       if (step.postcondition) {
-        const reached = await waitForCondition(
+        const state = await waitForStepState(
+          artifact,
           options.adapter,
-          step.postcondition,
           options.inputs,
+          step,
           step.timeoutMs,
           pollIntervalMs,
         );
-        if (!reached) {
-          steps.push(stepLog(step, "failed"));
-          return failure(
-            outputs,
-            steps,
-            "CHECKPOINT_FAILED",
-            step.id,
-            describeCondition(step.postcondition),
-            "condition was still false at the step deadline",
-          );
+
+        if (state.kind === "outcome") {
+          steps.push(stepLog(step, "completed"));
+          return businessOutcomeResult(state.outcome, step, outputs, steps, evidence);
         }
-        await collectVisibleOutputs(artifact, options.adapter, options.inputs, outputs);
+
+        if (state.kind === "recovery") {
+          const recoveryFailure = await runApplicableRecoveries(
+            artifact.recoveries,
+            options.adapter,
+            options.inputs,
+            step,
+            recoveryAttempts,
+            evidence,
+            pollIntervalMs,
+            outputs,
+            artifact,
+          );
+          if (recoveryFailure) {
+            steps.push(stepLog(step, "failed"));
+            return failWithEvidence(options.adapter, outputs, steps, evidence, recoveryFailure);
+          }
+
+          const reachedAfterRecovery = await waitForCondition(
+            options.adapter,
+            step.postcondition,
+            options.inputs,
+            step.timeoutMs,
+            pollIntervalMs,
+          );
+          if (!reachedAfterRecovery) {
+            steps.push(stepLog(step, "failed"));
+            const failureClass = await classifyObservedFailure(options.adapter, "CHECKPOINT_FAILED", options.inputs);
+            return failWithEvidence(options.adapter, outputs, steps, evidence, {
+              class: failureClass,
+              stepId: step.id,
+              expected: describeCondition(step.postcondition),
+              observed: "condition was still false after recovery",
+            });
+          }
+        }
+
+        if (state.kind === "timeout") {
+          steps.push(stepLog(step, "failed"));
+          const failureClass = await classifyObservedFailure(options.adapter, "CHECKPOINT_FAILED", options.inputs);
+          return failWithEvidence(options.adapter, outputs, steps, evidence, {
+            class: failureClass,
+            stepId: step.id,
+            expected: describeCondition(step.postcondition),
+            observed: "condition was still false at the step deadline",
+          });
+        }
+        await collectVisibleOutputs(artifact, options.adapter, options.inputs, outputs, evidence);
+      } else {
+        const outcome = await detectKnownOutcome(artifact, options.adapter, options.inputs, step);
+        if (outcome) {
+          steps.push(stepLog(step, "completed"));
+          return businessOutcomeResult(outcome, step, outputs, steps, evidence);
+        }
+
+        const recoveryFailure = await runApplicableRecoveries(
+          artifact.recoveries,
+          options.adapter,
+          options.inputs,
+          step,
+          recoveryAttempts,
+          evidence,
+          pollIntervalMs,
+          outputs,
+          artifact,
+        );
+        if (recoveryFailure) {
+          steps.push(stepLog(step, "failed"));
+          return failWithEvidence(options.adapter, outputs, steps, evidence, recoveryFailure);
+        }
       }
 
       steps.push(stepLog(step, "completed"));
+      await evidence.record({ type: "step_completed", stepId: step.id });
     } catch (error) {
       steps.push(stepLog(step, "failed"));
-      return failure(
-        outputs,
-        steps,
-        classifyError(error),
-        step.id,
-        describeAction(step.action),
-        error instanceof Error ? error.message : String(error),
-      );
+      return failWithEvidence(options.adapter, outputs, steps, evidence, {
+        class: classifyError(error),
+        stepId: step.id,
+        expected: describeAction(step.action),
+        observed: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -113,32 +210,30 @@ export async function replayArtifact(
     10_000,
     pollIntervalMs,
   );
-  await collectVisibleOutputs(artifact, options.adapter, options.inputs, outputs);
+  await collectVisibleOutputs(artifact, options.adapter, options.inputs, outputs, evidence);
 
   if (!success) {
-    return failure(
-      outputs,
-      steps,
-      "CHECKPOINT_FAILED",
-      "(successCondition)",
-      describeCondition(artifact.successCondition),
-      "success condition was still false after all steps completed",
-    );
+    const failureClass = await classifyObservedFailure(options.adapter, "CHECKPOINT_FAILED", options.inputs);
+    return failWithEvidence(options.adapter, outputs, steps, evidence, {
+      class: failureClass,
+      stepId: "(successCondition)",
+      expected: describeCondition(artifact.successCondition),
+      observed: "success condition was still false after all steps completed",
+    });
   }
 
   const missingOutput = Object.keys(artifact.outputs).find((name) => outputs[name] === undefined);
   if (missingOutput) {
-    return failure(
-      outputs,
-      steps,
-      "ADAPTER_ERROR",
-      "(outputs)",
-      `extract output "${missingOutput}"`,
-      "declared output was not visible on any replayed screen",
-    );
+    return failWithEvidence(options.adapter, outputs, steps, evidence, {
+      class: "ADAPTER_ERROR",
+      stepId: "(outputs)",
+      expected: `extract output "${missingOutput}"`,
+      observed: "declared output was not visible on any replayed screen",
+    });
   }
 
-  return { status: "success", outputs, steps };
+  await evidence.record({ type: "run_finished", status: "success" });
+  return { status: "success", outputs, steps, evidence: evidence.ref };
 }
 
 async function collectVisibleOutputs(
@@ -146,6 +241,7 @@ async function collectVisibleOutputs(
   adapter: SurfaceAdapter,
   inputs: Readonly<Record<string, string>>,
   outputs: ReplayOutputs,
+  evidence: ReplayEvidenceRecorder,
 ): Promise<void> {
   for (const [name, field] of Object.entries(artifact.outputs)) {
     if (outputs[name] !== undefined) continue;
@@ -157,7 +253,125 @@ async function collectVisibleOutputs(
       });
     if (raw === null) continue;
     outputs[name] = parseOutput(name, field, raw);
+    await evidence.record({ type: "output_extracted", name });
   }
+}
+
+async function detectKnownOutcome(
+  artifact: CapabilityArtifact,
+  adapter: SurfaceAdapter,
+  inputs: Readonly<Record<string, string>>,
+  step: Step,
+): Promise<KnownOutcome | null> {
+  for (const outcome of artifact.knownOutcomes) {
+    if (outcome.checkAfterSteps && !outcome.checkAfterSteps.includes(step.id)) continue;
+    if (await adapter.check(outcome.detector, inputs)) return outcome;
+  }
+  return null;
+}
+
+type StepState =
+  | { kind: "checkpoint" }
+  | { kind: "outcome"; outcome: KnownOutcome }
+  | { kind: "recovery" }
+  | { kind: "timeout" };
+
+async function waitForStepState(
+  artifact: CapabilityArtifact,
+  adapter: SurfaceAdapter,
+  inputs: Readonly<Record<string, string>>,
+  step: Step,
+  timeoutMs: number,
+  pollIntervalMs: number,
+): Promise<StepState> {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const outcome = await detectKnownOutcome(artifact, adapter, inputs, step);
+    if (outcome) return { kind: "outcome", outcome };
+    for (const recovery of artifact.recoveries) {
+      if (await adapter.check(recovery.when, inputs)) return { kind: "recovery" };
+    }
+    if (step.postcondition && (await adapter.check(step.postcondition, inputs))) {
+      return { kind: "checkpoint" };
+    }
+    await sleep(pollIntervalMs);
+  } while (Date.now() < deadline);
+  return { kind: "timeout" };
+}
+
+async function businessOutcomeResult(
+  outcome: KnownOutcome,
+  step: Step,
+  outputs: ReplayOutputs,
+  steps: ReplayStepLog[],
+  evidence: ReplayEvidenceRecorder,
+): Promise<ReplayResult> {
+  await evidence.record({
+    type: "business_outcome",
+    stepId: step.id,
+    code: outcome.code,
+    message: outcome.message,
+  });
+  await evidence.record({ type: "run_finished", status: "business_outcome" });
+  return {
+    status: "business_outcome",
+    code: outcome.code,
+    detail: outcome.message,
+    outputs,
+    steps,
+    evidence: evidence.ref,
+  };
+}
+
+interface FailureInput {
+  class: ReplayErrorClass;
+  stepId: string;
+  expected: string;
+  observed: string;
+}
+
+async function runApplicableRecoveries(
+  recoveries: readonly Recovery[],
+  adapter: SurfaceAdapter,
+  inputs: Readonly<Record<string, string>>,
+  step: Step,
+  attempts: Map<string, number>,
+  evidence: ReplayEvidenceRecorder,
+  pollIntervalMs: number,
+  outputs: ReplayOutputs,
+  artifact: CapabilityArtifact,
+): Promise<FailureInput | null> {
+  for (const recovery of recoveries) {
+    if (!(await adapter.check(recovery.when, inputs))) continue;
+    const used = attempts.get(recovery.id) ?? 0;
+    if (used >= recovery.maxTimes) {
+      return {
+        class: "RECOVERY_EXHAUSTED",
+        stepId: step.id,
+        expected: `recovery "${recovery.id}" to clear ${describeCondition(recovery.when)}`,
+        observed: `recovery trigger still present after ${used} attempt(s)`,
+      };
+    }
+
+    const attempt = used + 1;
+    attempts.set(recovery.id, attempt);
+    await evidence.record({
+      type: "recovery_started",
+      stepId: step.id,
+      recoveryId: recovery.id,
+      attempt,
+      maxTimes: recovery.maxTimes,
+    });
+
+    for (const action of recovery.do) {
+      await adapter.act(action, inputs);
+    }
+
+    await waitUntilFalse(adapter, recovery.when, inputs, 2_000, pollIntervalMs);
+    await collectVisibleOutputs(artifact, adapter, inputs, outputs, evidence);
+    await evidence.record({ type: "recovery_completed", stepId: step.id, recoveryId: recovery.id });
+  }
+  return null;
 }
 
 async function waitForCondition(
@@ -173,6 +387,21 @@ async function waitForCondition(
     await sleep(pollIntervalMs);
   } while (Date.now() < deadline);
   return adapter.check(condition, inputs);
+}
+
+async function waitUntilFalse(
+  adapter: SurfaceAdapter,
+  condition: Condition,
+  inputs: Readonly<Record<string, string>>,
+  timeoutMs: number,
+  pollIntervalMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    if (!(await adapter.check(condition, inputs))) return true;
+    await sleep(pollIntervalMs);
+  } while (Date.now() < deadline);
+  return !(await adapter.check(condition, inputs));
 }
 
 function parseOutput(name: string, field: OutputField, raw: string): ReplayOutput {
@@ -222,6 +451,30 @@ function classifyError(error: unknown): ReplayErrorClass {
   return "ADAPTER_ERROR";
 }
 
+async function classifyObservedFailure(
+  adapter: SurfaceAdapter,
+  fallback: ReplayErrorClass,
+  inputs: Readonly<Record<string, string>>,
+): Promise<ReplayErrorClass> {
+  if (
+    await adapter.check(
+      { kind: "text_present", text: { kind: "literal", value: "Application Error" }, nameMatch: "contains" },
+      inputs,
+    )
+  ) {
+    return "APP_ERROR";
+  }
+  if (
+    await adapter.check(
+      { kind: "text_present", text: { kind: "literal", value: "Your session has timed out" }, nameMatch: "contains" },
+      inputs,
+    )
+  ) {
+    return "SESSION_EXPIRED";
+  }
+  return fallback;
+}
+
 function isOutputNotCurrentlyVisible(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return (
@@ -231,24 +484,35 @@ function isOutputNotCurrentlyVisible(error: unknown): boolean {
   );
 }
 
-function failure(
+async function failWithEvidence(
+  adapter: SurfaceAdapter,
   outputs: ReplayOutputs,
   steps: ReplayStepLog[],
-  errorClass: ReplayErrorClass,
-  stepId: string,
-  expected: string,
-  observed: string,
-): ReplayResult {
+  evidence: ReplayEvidenceRecorder,
+  error: FailureInput,
+): Promise<ReplayResult> {
+  const snapshot = await adapter.snapshot().catch(() => null);
+  const snapshotPaths = snapshot ? await evidence.captureFailureSnapshot(snapshot) : {};
+  await evidence.record({
+    type: "failure",
+    stepId: error.stepId,
+    class: error.class,
+    expected: error.expected,
+    observed: error.observed,
+    ...snapshotPaths,
+  });
+  await evidence.record({ type: "run_finished", status: "failed" });
   return {
     status: "failed",
     outputs,
     steps,
     error: {
-      class: errorClass,
-      stepId,
-      expected,
-      observed,
+      class: error.class,
+      stepId: error.stepId,
+      expected: error.expected,
+      observed: error.observed,
     },
+    evidence: evidence.ref,
   };
 }
 

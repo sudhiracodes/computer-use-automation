@@ -24,6 +24,8 @@ Commands:
 
 Replay options:
   --input name=value          Bind an artifact input. Repeatable.
+  --evidence-dir path         Persist replay JSONL and failure artifacts under path.
+  --run-id id                 Stable evidence run id. Requires --evidence-dir.
   --headful                   Show the browser instead of running headless.
 `.trim();
 
@@ -114,7 +116,18 @@ async function replay(path: string | undefined, args: string[]): Promise<number>
   const adapter = await PlaywrightWebAdapter.launch({ headless: parsed.headless });
 
   try {
-    const result = await replayArtifact(artifact, { adapter, inputs });
+    const result = await replayArtifact(artifact, {
+      adapter,
+      inputs,
+      ...(parsed.evidenceDir
+        ? {
+            evidence: {
+              dir: parsed.evidenceDir,
+              ...(parsed.runId ? { runId: parsed.runId } : {}),
+            },
+          }
+        : {}),
+    });
     console.log(JSON.stringify(result, null, 2));
     return result.status === "success" ? 0 : 1;
   } finally {
@@ -123,17 +136,41 @@ async function replay(path: string | undefined, args: string[]): Promise<number>
 }
 
 type ReplayArgs =
-  | { ok: true; inputs: Record<string, string>; headless: boolean }
+  | { ok: true; inputs: Record<string, string>; headless: boolean; evidenceDir?: string; runId?: string }
   | { ok: false; message: string };
 
 function parseReplayArgs(args: string[]): ReplayArgs {
   const inputs: Record<string, string> = {};
   let headless = true;
+  let evidenceDir: string | undefined;
+  let runId: string | undefined;
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--headful") {
       headless = false;
+      continue;
+    }
+    if (arg === "--evidence-dir") {
+      evidenceDir = args[i + 1];
+      if (!evidenceDir) return { ok: false, message: "--evidence-dir requires a path" };
+      i += 1;
+      continue;
+    }
+    if (arg?.startsWith("--evidence-dir=")) {
+      evidenceDir = arg.slice("--evidence-dir=".length);
+      if (!evidenceDir) return { ok: false, message: "--evidence-dir requires a path" };
+      continue;
+    }
+    if (arg === "--run-id") {
+      runId = args[i + 1];
+      if (!runId) return { ok: false, message: "--run-id requires an id" };
+      i += 1;
+      continue;
+    }
+    if (arg?.startsWith("--run-id=")) {
+      runId = arg.slice("--run-id=".length);
+      if (!runId) return { ok: false, message: "--run-id requires an id" };
       continue;
     }
     if (arg === "--input") {
@@ -154,7 +191,17 @@ function parseReplayArgs(args: string[]): ReplayArgs {
     return { ok: false, message: `unknown replay option "${arg ?? ""}"` };
   }
 
-  return { ok: true, inputs, headless };
+  if (runId && !evidenceDir) {
+    return { ok: false, message: "--run-id requires --evidence-dir" };
+  }
+
+  return {
+    ok: true,
+    inputs,
+    headless,
+    ...(evidenceDir ? { evidenceDir } : {}),
+    ...(runId ? { runId } : {}),
+  };
 }
 
 type ParsedBinding =

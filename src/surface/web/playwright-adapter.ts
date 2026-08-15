@@ -374,13 +374,32 @@ export class PlaywrightWebAdapter implements SurfaceAdapter {
     return {
       url: this.page.url(),
       screenshot: await this.page.screenshot({ fullPage: true }),
-      domSnapshot: await this.page.content(),
+      domSnapshot: await this.domSnapshot(),
     };
   }
 
   async dispose(): Promise<void> {
     await this.context.close().catch(() => undefined);
     await this.browser.close().catch(() => undefined);
+  }
+
+  private async domSnapshot(): Promise<string> {
+    const parts: string[] = [];
+    for (const frame of this.page.frames()) {
+      const framePath = pathOf(frame, this.page);
+      const html = await frame
+        .evaluate(() => {
+          const browserGlobal = globalThis as unknown as {
+            document?: { documentElement?: { outerHTML?: string } };
+          };
+          return browserGlobal.document?.documentElement?.outerHTML ?? "";
+        })
+        .catch((error: unknown) =>
+          error instanceof Error ? `<!-- unavailable: ${error.message} -->` : "<!-- unavailable -->",
+        );
+      parts.push(`<!-- frame: ${framePath.length ? framePath.join(" > ") : "(main)"} -->\n${html}`);
+    }
+    return parts.join("\n\n");
   }
 }
 
