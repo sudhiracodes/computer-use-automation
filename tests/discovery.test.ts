@@ -143,12 +143,10 @@ describe("LLM-driven discovery", () => {
         inputs: defaultInputs(),
       });
 
-      expect(result).toEqual(
-        expect.objectContaining({
-          status: "failed",
-          reason: "model selected an inventory element that is not present in the current observation",
-        }),
-      );
+      expect(result.status).toBe("failed");
+      if (result.status !== "failed") return;
+      expect(result.reason).toContain("model did not provide a usable action after 3 repair attempt");
+      expect(result.reason).toContain("model selected an inventory element that is not present in the current observation");
     } finally {
       await adapter.dispose();
     }

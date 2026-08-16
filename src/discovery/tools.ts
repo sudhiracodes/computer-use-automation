@@ -38,7 +38,7 @@ export function discoveryToolDefs(): ToolDef[] {
     {
       name: "act",
       description:
-        "Choose exactly one action using an element id from the current inventory. Use input names, never raw secret values.",
+        "Choose exactly one action using an element id from the current inventory. Use input names, never raw secret values. When kind is check, include checked=true or checked=false.",
       jsonSchema: {
         type: "object",
         properties: {
@@ -48,7 +48,10 @@ export function discoveryToolDefs(): ToolDef[] {
           },
           elementId: { type: "integer", minimum: 1 },
           inputName: { type: "string" },
-          checked: { type: "boolean" },
+          checked: {
+            type: "boolean",
+            description: "Required when kind is check. Use true to check a checkbox and false to uncheck it.",
+          },
           intent: { type: "string" },
         },
         required: ["kind", "intent"],

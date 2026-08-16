@@ -1,9 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { GeminiProvider } from "./providers/gemini.js";
+import { OpenAICompatibleProvider } from "./providers/openai-compatible.js";
 import type { LLMProvider } from "./provider.js";
 
 interface LLMConfig {
-  provider: "gemini";
+  provider: "gemini" | "openai-compatible";
   model: string;
   baseUrl?: string;
 }
@@ -22,6 +23,18 @@ export async function createLLMProvider(configPath = "config/llm.json"): Promise
       }
       const baseUrl = process.env.LLM_BASE_URL ?? config.baseUrl;
       return new GeminiProvider({
+        apiKey,
+        model,
+        ...(baseUrl ? { baseUrl } : {}),
+      });
+    }
+    case "openai-compatible": {
+      const apiKey = process.env.LLM_API_KEY;
+      if (!apiKey) {
+        throw new Error("LLM_API_KEY is required for OpenAI-compatible discovery runs");
+      }
+      const baseUrl = process.env.LLM_BASE_URL ?? config.baseUrl;
+      return new OpenAICompatibleProvider({
         apiKey,
         model,
         ...(baseUrl ? { baseUrl } : {}),

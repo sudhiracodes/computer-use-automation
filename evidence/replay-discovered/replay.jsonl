@@ -1,0 +1,30 @@
+{"type":"run_started","artifactId":"open-savings-sub-account","artifactVersion":"1.0.0","runId":"replay-discovered","at":"2026-08-16T15:35:58.121Z"}
+{"type":"step_started","stepId":"open-signon","action":"navigate","intent":"Load the target application entry point.","runId":"replay-discovered","at":"2026-08-16T15:35:58.122Z"}
+{"type":"step_completed","stepId":"open-signon","runId":"replay-discovered","at":"2026-08-16T15:35:58.139Z"}
+{"type":"step_started","stepId":"enter-operator-id","action":"type","intent":"Enter operator ID","runId":"replay-discovered","at":"2026-08-16T15:35:58.140Z"}
+{"type":"step_completed","stepId":"enter-operator-id","runId":"replay-discovered","at":"2026-08-16T15:35:58.170Z"}
+{"type":"step_started","stepId":"enter-operator-password","action":"type","intent":"Type operator password into Password textbox","runId":"replay-discovered","at":"2026-08-16T15:35:58.170Z"}
+{"type":"step_completed","stepId":"enter-operator-password","runId":"replay-discovered","at":"2026-08-16T15:35:58.205Z"}
+{"type":"step_started","stepId":"submit-signon","action":"click","intent":"Sign on to MERIDIAN Core","runId":"replay-discovered","at":"2026-08-16T15:35:58.206Z"}
+{"type":"step_completed","stepId":"submit-signon","runId":"replay-discovered","at":"2026-08-16T15:35:58.371Z"}
+{"type":"step_started","stepId":"enter-member-id","action":"type","intent":"Type member ID into search input","runId":"replay-discovered","at":"2026-08-16T15:35:58.372Z"}
+{"type":"step_completed","stepId":"enter-member-id","runId":"replay-discovered","at":"2026-08-16T15:35:58.392Z"}
+{"type":"step_started","stepId":"run-search","action":"click","intent":"Search for member","runId":"replay-discovered","at":"2026-08-16T15:35:58.392Z"}
+{"type":"step_completed","stepId":"run-search","runId":"replay-discovered","at":"2026-08-16T15:35:58.458Z"}
+{"type":"step_started","stepId":"open-member-detail","action":"click","intent":"Click View to access member details","runId":"replay-discovered","at":"2026-08-16T15:35:58.459Z"}
+{"type":"output_extracted","name":"savingsBalance","runId":"replay-discovered","at":"2026-08-16T15:35:58.618Z"}
+{"type":"step_completed","stepId":"open-member-detail","runId":"replay-discovered","at":"2026-08-16T15:35:58.620Z"}
+{"type":"step_started","stepId":"open-subaccount-form","action":"click","intent":"Click Open Sub-Account button","runId":"replay-discovered","at":"2026-08-16T15:35:58.620Z"}
+{"type":"step_completed","stepId":"open-subaccount-form","runId":"replay-discovered","at":"2026-08-16T15:35:58.763Z"}
+{"type":"step_started","stepId":"choose-account-type","action":"select","intent":"select_param","runId":"replay-discovered","at":"2026-08-16T15:35:58.763Z"}
+{"type":"step_completed","stepId":"choose-account-type","runId":"replay-discovered","at":"2026-08-16T15:35:58.778Z"}
+{"type":"step_started","stepId":"enter-initial-deposit","action":"type","intent":"Type initial deposit amount","runId":"replay-discovered","at":"2026-08-16T15:35:58.778Z"}
+{"type":"step_completed","stepId":"enter-initial-deposit","runId":"replay-discovered","at":"2026-08-16T15:35:58.789Z"}
+{"type":"step_started","stepId":"acknowledge-disclosure","action":"check","intent":"Check member acknowledged account disclosure","runId":"replay-discovered","at":"2026-08-16T15:35:58.789Z"}
+{"type":"step_completed","stepId":"acknowledge-disclosure","runId":"replay-discovered","at":"2026-08-16T15:35:58.818Z"}
+{"type":"step_started","stepId":"continue-to-review","action":"click","intent":"click Continue button to submit opening sub-account form","runId":"replay-discovered","at":"2026-08-16T15:35:58.818Z"}
+{"type":"step_completed","stepId":"continue-to-review","runId":"replay-discovered","at":"2026-08-16T15:35:58.965Z"}
+{"type":"step_started","stepId":"confirm-open-account","action":"click","intent":"Confirm and open the sub-account","runId":"replay-discovered","at":"2026-08-16T15:35:58.966Z"}
+{"type":"output_extracted","name":"newSubAccountNumber","runId":"replay-discovered","at":"2026-08-16T15:35:59.098Z"}
+{"type":"step_completed","stepId":"confirm-open-account","runId":"replay-discovered","at":"2026-08-16T15:35:59.098Z"}
+{"type":"run_finished","status":"success","runId":"replay-discovered","at":"2026-08-16T15:35:59.101Z"}

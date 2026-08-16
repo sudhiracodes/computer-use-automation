@@ -1,0 +1,587 @@
+{
+  "schemaVersion": 1,
+  "id": "open-savings-sub-account",
+  "name": "Open a savings sub-account for a member",
+  "version": "1.0.0",
+  "status": "draft",
+  "description": "Signs on to MERIDIAN Core, looks up a member by number, reads their current savings balance, then opens a new savings sub-account and reaches the confirmation screen. Returns the balance read before the change and the account number assigned by the core.",
+  "target": {
+    "surface": "web",
+    "app": "meridian-core",
+    "appVersion": "0.1.0",
+    "entryUrl": "http://localhost:3000/",
+    "allowlistRef": "config/allowlist.json"
+  },
+  "inputs": {
+    "operatorId": {
+      "type": "string",
+      "description": "Operator ID to sign on with. Supplied from the environment at invocation, never stored here.",
+      "required": true,
+      "sensitivity": "none",
+      "example": "teller01"
+    },
+    "operatorPassword": {
+      "type": "string",
+      "description": "Password for the operator. Supplied from the environment at invocation. Never logged, never written to evidence, never included in a model request.",
+      "required": true,
+      "sensitivity": "secret"
+    },
+    "memberId": {
+      "type": "string",
+      "description": "Six-digit member number as printed on the member's statement. No example is given: a member number identifies a person, and an example value in a committed artifact is a leak.",
+      "required": true,
+      "sensitivity": "pii"
+    },
+    "accountType": {
+      "type": "string",
+      "description": "Sub-account product to open. Must match one of the options offered on the form: Regular Savings, Holiday Club, Vacation Club, Youth Savings.",
+      "required": true,
+      "sensitivity": "none",
+      "example": "Holiday Club"
+    },
+    "initialDeposit": {
+      "type": "string",
+      "description": "Opening deposit as a dollar amount with up to two decimal places, e.g. 25.00. Sent as a string because the form is a text field and rounding it through a float would change what the operator sees.",
+      "required": true,
+      "sensitivity": "none",
+      "example": "25.00"
+    }
+  },
+  "outputs": {
+    "savingsBalance": {
+      "type": "number",
+      "description": "The member's savings balance as displayed before the sub-account was opened.",
+      "sensitivity": "pii",
+      "extraction": {
+        "from": "field_value",
+        "target": {
+          "strategy": "semantic",
+          "role": "textbox",
+          "name": "Savings Balance",
+          "nameMatch": "normalized",
+          "nameSource": "adjacent-cell",
+          "scope": {
+            "kind": "labelled_group",
+            "name": {
+              "kind": "literal",
+              "value": "Balance Summary"
+            },
+            "nameMatch": "normalized"
+          },
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        },
+        "parse": "currency_to_number"
+      }
+    },
+    "newSubAccountNumber": {
+      "type": "string",
+      "description": "Account number assigned by the core to the newly opened sub-account. Differs on every invocation — it is server-assigned, not derived from the inputs.",
+      "sensitivity": "pii",
+      "extraction": {
+        "from": "text_content",
+        "target": {
+          "strategy": "semantic",
+          "role": "cell",
+          "name": "",
+          "nameMatch": "normalized",
+          "scope": {
+            "kind": "table_row",
+            "name": {
+              "kind": "literal",
+              "value": "New Sub-Account Number"
+            },
+            "nameMatch": "contains"
+          },
+          "ordinal": 1,
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        },
+        "parse": "trim"
+      }
+    }
+  },
+  "steps": [
+    {
+      "id": "open-signon",
+      "intent": "Load the target application entry point.",
+      "action": {
+        "kind": "navigate",
+        "url": {
+          "kind": "literal",
+          "value": "http://localhost:3000/"
+        }
+      },
+      "postcondition": {
+        "kind": "element_present",
+        "target": {
+          "strategy": "semantic",
+          "role": "textbox",
+          "name": "Operator ID",
+          "nameMatch": "normalized",
+          "nameSource": "label-for",
+          "framePath": [],
+          "fallbacks": []
+        }
+      },
+      "timeoutMs": 10000,
+      "risk": "safe"
+    },
+    {
+      "id": "enter-operator-id",
+      "intent": "Enter operator ID",
+      "action": {
+        "kind": "type",
+        "target": {
+          "strategy": "semantic",
+          "role": "textbox",
+          "name": "Operator ID",
+          "nameMatch": "normalized",
+          "nameSource": "label-for",
+          "framePath": [],
+          "fallbacks": []
+        },
+        "value": {
+          "kind": "param",
+          "param": "operatorId"
+        },
+        "mode": "replace"
+      },
+      "timeoutMs": 10000,
+      "risk": "sensitive"
+    },
+    {
+      "id": "enter-operator-password",
+      "intent": "Type operator password into Password textbox",
+      "action": {
+        "kind": "type",
+        "target": {
+          "strategy": "semantic",
+          "role": "textbox",
+          "name": "Password",
+          "nameMatch": "normalized",
+          "nameSource": "label-for",
+          "framePath": [],
+          "fallbacks": []
+        },
+        "value": {
+          "kind": "param",
+          "param": "operatorPassword"
+        },
+        "mode": "replace"
+      },
+      "timeoutMs": 10000,
+      "risk": "sensitive"
+    },
+    {
+      "id": "submit-signon",
+      "intent": "Sign on to MERIDIAN Core",
+      "action": {
+        "kind": "click",
+        "target": {
+          "strategy": "semantic",
+          "role": "button",
+          "name": "Sign On",
+          "nameMatch": "normalized",
+          "nameSource": "native",
+          "framePath": [],
+          "fallbacks": []
+        }
+      },
+      "postcondition": {
+        "kind": "element_present",
+        "target": {
+          "strategy": "semantic",
+          "role": "textbox",
+          "name": "Member ID",
+          "nameMatch": "normalized",
+          "nameSource": "adjacent-cell",
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        }
+      },
+      "timeoutMs": 10000,
+      "risk": "safe"
+    },
+    {
+      "id": "enter-member-id",
+      "intent": "Type member ID into search input",
+      "action": {
+        "kind": "type",
+        "target": {
+          "strategy": "semantic",
+          "role": "textbox",
+          "name": "Member ID",
+          "nameMatch": "normalized",
+          "nameSource": "adjacent-cell",
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        },
+        "value": {
+          "kind": "param",
+          "param": "memberId"
+        },
+        "mode": "replace"
+      },
+      "timeoutMs": 10000,
+      "risk": "sensitive"
+    },
+    {
+      "id": "run-search",
+      "intent": "Search for member",
+      "action": {
+        "kind": "click",
+        "target": {
+          "strategy": "semantic",
+          "role": "button",
+          "name": "Search",
+          "nameMatch": "normalized",
+          "nameSource": "native",
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        }
+      },
+      "postcondition": {
+        "kind": "element_present",
+        "target": {
+          "strategy": "semantic",
+          "role": "link",
+          "name": "View",
+          "nameMatch": "normalized",
+          "nameSource": "native",
+          "scope": {
+            "kind": "table_row",
+            "name": {
+              "kind": "param",
+              "param": "memberId"
+            },
+            "nameMatch": "contains"
+          },
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        }
+      },
+      "timeoutMs": 10000,
+      "risk": "safe"
+    },
+    {
+      "id": "open-member-detail",
+      "intent": "Click View to access member details",
+      "action": {
+        "kind": "click",
+        "target": {
+          "strategy": "semantic",
+          "role": "link",
+          "name": "View",
+          "nameMatch": "normalized",
+          "nameSource": "native",
+          "scope": {
+            "kind": "table_row",
+            "name": {
+              "kind": "param",
+              "param": "memberId"
+            },
+            "nameMatch": "contains"
+          },
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        }
+      },
+      "postcondition": {
+        "kind": "element_present",
+        "target": {
+          "strategy": "semantic",
+          "role": "textbox",
+          "name": "Savings Balance",
+          "nameMatch": "normalized",
+          "nameSource": "adjacent-cell",
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        }
+      },
+      "timeoutMs": 10000,
+      "risk": "safe"
+    },
+    {
+      "id": "open-subaccount-form",
+      "intent": "Click Open Sub-Account button",
+      "action": {
+        "kind": "click",
+        "target": {
+          "strategy": "semantic",
+          "role": "button",
+          "name": "Open Sub-Account",
+          "nameMatch": "normalized",
+          "nameSource": "native",
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        }
+      },
+      "postcondition": {
+        "kind": "element_present",
+        "target": {
+          "strategy": "semantic",
+          "role": "combobox",
+          "name": "Account Type",
+          "nameMatch": "normalized",
+          "nameSource": "title",
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        }
+      },
+      "timeoutMs": 10000,
+      "risk": "safe"
+    },
+    {
+      "id": "choose-account-type",
+      "intent": "select_param",
+      "action": {
+        "kind": "select",
+        "target": {
+          "strategy": "semantic",
+          "role": "combobox",
+          "name": "Account Type",
+          "nameMatch": "normalized",
+          "nameSource": "title",
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        },
+        "value": {
+          "kind": "param",
+          "param": "accountType"
+        }
+      },
+      "timeoutMs": 10000,
+      "risk": "sensitive"
+    },
+    {
+      "id": "enter-initial-deposit",
+      "intent": "Type initial deposit amount",
+      "action": {
+        "kind": "type",
+        "target": {
+          "strategy": "semantic",
+          "role": "textbox",
+          "name": "Initial Deposit",
+          "nameMatch": "normalized",
+          "nameSource": "label-for",
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        },
+        "value": {
+          "kind": "param",
+          "param": "initialDeposit"
+        },
+        "mode": "replace"
+      },
+      "timeoutMs": 10000,
+      "risk": "sensitive"
+    },
+    {
+      "id": "acknowledge-disclosure",
+      "intent": "Check member acknowledged account disclosure",
+      "action": {
+        "kind": "check",
+        "target": {
+          "strategy": "semantic",
+          "role": "checkbox",
+          "name": "Disclosure",
+          "nameMatch": "normalized",
+          "nameSource": "adjacent-cell",
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        },
+        "checked": true
+      },
+      "timeoutMs": 10000,
+      "risk": "sensitive"
+    },
+    {
+      "id": "continue-to-review",
+      "intent": "click Continue button to submit opening sub-account form",
+      "action": {
+        "kind": "click",
+        "target": {
+          "strategy": "semantic",
+          "role": "button",
+          "name": "Continue",
+          "nameMatch": "normalized",
+          "nameSource": "native",
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        }
+      },
+      "postcondition": {
+        "kind": "element_present",
+        "target": {
+          "strategy": "semantic",
+          "role": "button",
+          "name": "Confirm and Open Account",
+          "nameMatch": "normalized",
+          "nameSource": "native",
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        }
+      },
+      "timeoutMs": 10000,
+      "risk": "safe"
+    },
+    {
+      "id": "confirm-open-account",
+      "intent": "Confirm and open the sub-account",
+      "action": {
+        "kind": "click",
+        "target": {
+          "strategy": "semantic",
+          "role": "button",
+          "name": "Confirm and Open Account",
+          "nameMatch": "normalized",
+          "nameSource": "native",
+          "framePath": [
+            "content"
+          ],
+          "fallbacks": []
+        }
+      },
+      "postcondition": {
+        "kind": "text_present",
+        "text": {
+          "kind": "literal",
+          "value": "Sub-Account Opened"
+        },
+        "nameMatch": "contains"
+      },
+      "timeoutMs": 10000,
+      "risk": "irreversible"
+    }
+  ],
+  "successCondition": {
+    "kind": "element_present",
+    "target": {
+      "strategy": "semantic",
+      "role": "cell",
+      "name": "",
+      "nameMatch": "normalized",
+      "scope": {
+        "kind": "table_row",
+        "name": {
+          "kind": "literal",
+          "value": "New Sub-Account Number"
+        },
+        "nameMatch": "contains"
+      },
+      "ordinal": 1,
+      "framePath": [
+        "content"
+      ],
+      "fallbacks": []
+    }
+  },
+  "knownOutcomes": [
+    {
+      "code": "MEMBER_NOT_FOUND",
+      "description": "No member exists with the supplied member number. A legitimate answer, not a failure — the caller decides what to do about it.",
+      "detector": {
+        "kind": "text_present",
+        "text": {
+          "kind": "literal",
+          "value": "No member found matching that ID"
+        },
+        "nameMatch": "normalized"
+      },
+      "message": "No member exists with the supplied member number.",
+      "checkAfterSteps": [
+        "run-search"
+      ]
+    },
+    {
+      "code": "INVALID_DEPOSIT_AMOUNT",
+      "description": "The core rejected the opening deposit as not a well-formed dollar amount. The caller supplied a bad argument; nothing was created.",
+      "detector": {
+        "kind": "text_present",
+        "text": {
+          "kind": "literal",
+          "value": "Initial Deposit must be a dollar amount"
+        },
+        "nameMatch": "normalized"
+      },
+      "message": "The opening deposit was rejected as not a valid dollar amount.",
+      "checkAfterSteps": [
+        "continue-to-review"
+      ]
+    }
+  ],
+  "recoveries": [
+    {
+      "id": "dismiss-system-notice",
+      "description": "MERIDIAN Core interposes a maintenance notice over the member screen. It is modal and covers the page, so it must be dismissed before any further click can land. Bounded to one attempt: a notice that reappears is not an interstitial, it is a broken screen, and looping on it would hide that.",
+      "when": {
+        "kind": "text_present",
+        "text": {
+          "kind": "literal",
+          "value": "System Notice"
+        },
+        "nameMatch": "normalized"
+      },
+      "do": [
+        {
+          "kind": "click",
+          "target": {
+            "strategy": "semantic",
+            "role": "button",
+            "name": "OK",
+            "nameMatch": "normalized",
+            "nameSource": "native",
+            "framePath": [
+              "content"
+            ],
+            "fallbacks": []
+          }
+        }
+      ],
+      "maxTimes": 1
+    }
+  ],
+  "provenance": {
+    "discoveredBy": "llm",
+    "provider": "gemini",
+    "model": "gemini-3.6-flash",
+    "runId": "discovery-gemini",
+    "discoveredAt": "2026-08-16T15:35:51.266Z",
+    "transcriptHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "toolVersions": {
+      "discovery": "1",
+      "schema": "1"
+    }
+  }
+}

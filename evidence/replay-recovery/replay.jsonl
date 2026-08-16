@@ -1,0 +1,32 @@
+{"type":"run_started","artifactId":"open-savings-sub-account","artifactVersion":"1.0.0","runId":"replay-recovery","at":"2026-08-16T15:36:46.057Z"}
+{"type":"step_started","stepId":"open-signon","action":"navigate","intent":"Load the MERIDIAN Core sign-on page.","runId":"replay-recovery","at":"2026-08-16T15:36:46.058Z"}
+{"type":"step_completed","stepId":"open-signon","runId":"replay-recovery","at":"2026-08-16T15:36:46.119Z"}
+{"type":"step_started","stepId":"enter-operator-id","action":"type","intent":"Type the operator ID into the sign-on form.","runId":"replay-recovery","at":"2026-08-16T15:36:46.119Z"}
+{"type":"step_completed","stepId":"enter-operator-id","runId":"replay-recovery","at":"2026-08-16T15:36:46.159Z"}
+{"type":"step_started","stepId":"enter-operator-password","action":"type","intent":"Type the operator password. The value is bound at invocation and is redacted everywhere it would otherwise be recorded.","runId":"replay-recovery","at":"2026-08-16T15:36:46.159Z"}
+{"type":"step_completed","stepId":"enter-operator-password","runId":"replay-recovery","at":"2026-08-16T15:36:46.195Z"}
+{"type":"step_started","stepId":"submit-signon","action":"click","intent":"Submit the sign-on form and wait for the console to load its content frame.","runId":"replay-recovery","at":"2026-08-16T15:36:46.195Z"}
+{"type":"step_completed","stepId":"submit-signon","runId":"replay-recovery","at":"2026-08-16T15:36:46.270Z"}
+{"type":"step_started","stepId":"enter-member-id","action":"type","intent":"Enter the member number in the search box. This control has no accessible name in the markup; the name above is derived from the adjacent label cell.","runId":"replay-recovery","at":"2026-08-16T15:36:46.270Z"}
+{"type":"step_completed","stepId":"enter-member-id","runId":"replay-recovery","at":"2026-08-16T15:36:46.287Z"}
+{"type":"step_started","stepId":"run-search","action":"click","intent":"Run the member search and wait for a result row for this specific member.","runId":"replay-recovery","at":"2026-08-16T15:36:46.287Z"}
+{"type":"step_completed","stepId":"run-search","runId":"replay-recovery","at":"2026-08-16T15:36:46.342Z"}
+{"type":"step_started","stepId":"open-member-detail","action":"click","intent":"Open the member's detail screen. Every result row has a link named View, so the row is selected by the member number rather than by position.","runId":"replay-recovery","at":"2026-08-16T15:36:46.342Z"}
+{"type":"recovery_started","stepId":"open-member-detail","recoveryId":"dismiss-system-notice","attempt":1,"maxTimes":1,"runId":"replay-recovery","at":"2026-08-16T15:36:46.493Z"}
+{"type":"recovery_completed","stepId":"open-member-detail","recoveryId":"dismiss-system-notice","runId":"replay-recovery","at":"2026-08-16T15:36:46.522Z"}
+{"type":"output_extracted","name":"savingsBalance","runId":"replay-recovery","at":"2026-08-16T15:36:46.632Z"}
+{"type":"step_completed","stepId":"open-member-detail","runId":"replay-recovery","at":"2026-08-16T15:36:46.634Z"}
+{"type":"step_started","stepId":"open-subaccount-form","action":"click","intent":"Start the sub-account application. Nothing is created by reaching this form.","runId":"replay-recovery","at":"2026-08-16T15:36:46.634Z"}
+{"type":"step_completed","stepId":"open-subaccount-form","runId":"replay-recovery","at":"2026-08-16T15:36:46.785Z"}
+{"type":"step_started","stepId":"choose-account-type","action":"select","intent":"Select the sub-account product.","runId":"replay-recovery","at":"2026-08-16T15:36:46.785Z"}
+{"type":"step_completed","stepId":"choose-account-type","runId":"replay-recovery","at":"2026-08-16T15:36:46.803Z"}
+{"type":"step_started","stepId":"enter-initial-deposit","action":"type","intent":"Enter the opening deposit, then assert the field really holds it — a silently rejected keystroke would otherwise open the account for the wrong amount.","runId":"replay-recovery","at":"2026-08-16T15:36:46.803Z"}
+{"type":"step_completed","stepId":"enter-initial-deposit","runId":"replay-recovery","at":"2026-08-16T15:36:46.815Z"}
+{"type":"step_started","stepId":"acknowledge-disclosure","action":"check","intent":"Record that the member acknowledged the account disclosure. Uses check rather than click so the step converges to the same state however many times it runs.","runId":"replay-recovery","at":"2026-08-16T15:36:46.815Z"}
+{"type":"step_completed","stepId":"acknowledge-disclosure","runId":"replay-recovery","at":"2026-08-16T15:36:46.851Z"}
+{"type":"step_started","stepId":"continue-to-review","action":"click","intent":"Submit the form to the review screen. Still reversible — the core has not been asked to create anything yet.","runId":"replay-recovery","at":"2026-08-16T15:36:46.852Z"}
+{"type":"step_completed","stepId":"continue-to-review","runId":"replay-recovery","at":"2026-08-16T15:36:47.000Z"}
+{"type":"step_started","stepId":"confirm-open-account","action":"click","intent":"Commit the new sub-account. This is the point of no return: it posts to the core and cannot be undone by navigating back.","runId":"replay-recovery","at":"2026-08-16T15:36:47.000Z"}
+{"type":"output_extracted","name":"newSubAccountNumber","runId":"replay-recovery","at":"2026-08-16T15:36:47.149Z"}
+{"type":"step_completed","stepId":"confirm-open-account","runId":"replay-recovery","at":"2026-08-16T15:36:47.150Z"}
+{"type":"run_finished","status":"success","runId":"replay-recovery","at":"2026-08-16T15:36:47.152Z"}

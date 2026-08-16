@@ -40,22 +40,38 @@ export class GeminiProvider implements LLMProvider {
   }
 
   async complete(request: LLMRequest): Promise<LLMResponse> {
-    const response = await fetch(
-      `${this.baseUrl}/models/${encodeURIComponent(this.model)}:generateContent`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": this.apiKey },
-        body: JSON.stringify(toGeminiRequest(request)),
-      },
-    );
+    const MAX_RETRIES = 8;
 
-    const raw = (await response.json().catch(() => ({}))) as GeminiResponse;
-    if (!response.ok) {
-      const message = raw.error?.message ?? `Gemini request failed with HTTP ${response.status}`;
-      throw new Error(message);
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const response = await fetch(
+        `${this.baseUrl}/models/${encodeURIComponent(this.model)}:generateContent`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-goog-api-key": this.apiKey },
+          body: JSON.stringify(toGeminiRequest(request)),
+        },
+      );
+
+      const raw = (await response.json().catch(() => ({}))) as GeminiResponse;
+
+      if ((response.status === 429 || response.status === 503) && attempt < MAX_RETRIES) {
+        const retryMatch = raw.error?.message?.match(/retry in ([\d.]+)s/i);
+        const parsedSeconds = retryMatch && retryMatch[1] ? parseFloat(retryMatch[1]) : NaN;
+        const waitSeconds = !Number.isNaN(parsedSeconds) ? Math.ceil(parsedSeconds) + 2 : 20 * (attempt + 1);
+        console.error(`[gemini] ${response.status === 429 ? "rate limited" : "service overloaded"}, retrying in ${waitSeconds}s (attempt ${attempt + 1}/${MAX_RETRIES})`);
+        await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
+        continue;
+      }
+
+      if (!response.ok) {
+        const message = raw.error?.message ?? `Gemini request failed with HTTP ${response.status}`;
+        throw new Error(message);
+      }
+
+      return fromGeminiResponse(raw);
     }
 
-    return fromGeminiResponse(raw);
+    throw new Error("Gemini request failed: max retries exceeded on rate limit");
   }
 }
 

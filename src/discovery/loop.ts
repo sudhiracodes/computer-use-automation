@@ -23,6 +23,7 @@ export interface DiscoveryOptions {
   adapter: SurfaceAdapter;
   inputs: Readonly<Record<string, string>>;
   maxSteps?: number;
+  providerMinIntervalMs?: number;
   evidence?: DiscoveryEvidenceOptions;
   policy?: PolicyContext;
 }
@@ -32,13 +33,19 @@ export type DiscoveryResult =
   | { status: "failed"; reason: string; evidence: DiscoveryEvidenceRef };
 
 const DEFAULT_MAX_STEPS = 30;
+const MAX_REPAIR_ATTEMPTS = 3;
 
 export async function runDiscovery(options: DiscoveryOptions): Promise<DiscoveryResult> {
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
+  const providerMinIntervalMs = options.providerMinIntervalMs ?? defaultProviderMinIntervalMs(options.provider);
   const evidence = createDiscoveryEvidenceRecorder(options.evidence);
   const recorded: RecordedDiscoveryAction[] = [];
   const messages: LLMMessage[] = [];
   const redactor = redactorFor(options.template, options.inputs);
+  const actionHistory: string[] = [];
+  let repairFeedback: string | null = null;
+  let repairAttempts = 0;
+  let lastProviderCallAt = 0;
 
   await evidence.record({
     type: "run_started",
@@ -72,9 +79,22 @@ export async function runDiscovery(options: DiscoveryOptions): Promise<Discovery
 
     messages.push({
       role: "user",
-      content: [{ type: "text", text: renderPrompt(redactor(options.goal), options.template, observation, redactor) }],
+      content: [{
+        type: "text",
+        text: renderPrompt(
+          redactor(options.goal),
+          options.template,
+          observation,
+          redactor,
+          actionHistory,
+          repairFeedback,
+          options.inputs,
+        ),
+      }],
     });
 
+    await waitForProviderPacing(lastProviderCallAt, providerMinIntervalMs);
+    lastProviderCallAt = Date.now();
     const response = await options.provider
       .complete({
         system: SYSTEM_PROMPT,
@@ -102,15 +122,36 @@ export async function runDiscovery(options: DiscoveryOptions): Promise<Discovery
 
     const parsed = DiscoveryToolCall.safeParse(toolCall.args);
     if (!parsed.success) {
-      return failDiscovery(evidence, `model returned malformed tool args: ${z.prettifyError(parsed.error)}`);
+      const feedback = `Previous action was rejected: malformed tool args. ${z.prettifyError(parsed.error)}. ` +
+        `Return a valid act call. If kind is check, include checked=true or checked=false.`;
+      const repaired = noteRepair(feedback, repairAttempts);
+      if (!repaired.ok) return failDiscovery(evidence, repaired.reason);
+      repairFeedback = repaired.feedback;
+      repairAttempts = repaired.attempts;
+      continue;
     }
 
     const call = parsed.data;
     const validationError = validateToolCall(call, options.template, observation);
     if (validationError) {
-      return failDiscovery(evidence, validationError);
+      const repaired = noteRepair(`Previous action was rejected: ${validationError}. Choose a different valid next action.`, repairAttempts);
+      if (!repaired.ok) return failDiscovery(evidence, repaired.reason);
+      repairFeedback = repaired.feedback;
+      repairAttempts = repaired.attempts;
+      continue;
     }
 
+    const redundantType = redundantTypeFeedback(call, observation, options.inputs, options.template);
+    if (redundantType) {
+      const repaired = noteRepair(redundantType, repairAttempts);
+      if (!repaired.ok) return failDiscovery(evidence, repaired.reason);
+      repairFeedback = repaired.feedback;
+      repairAttempts = repaired.attempts;
+      continue;
+    }
+
+    repairFeedback = null;
+    repairAttempts = 0;
     await evidence.record({ type: "model_tool", step, name: toolCall.name, args: redactToolArgs(call) });
 
     if (call.kind === "finish") {
@@ -169,10 +210,23 @@ export async function runDiscovery(options: DiscoveryOptions): Promise<Discovery
     }
     observation = observed.result;
     recorded.push({ call, before, after: observation });
+    actionHistory.push(historyLine(call, before));
   }
 
   await evidence.record({ type: "run_finished", status: "failed" });
   return { status: "failed", reason: `max steps (${maxSteps}) reached`, evidence: evidence.ref };
+}
+
+type RepairState =
+  | { ok: true; feedback: string; attempts: number }
+  | { ok: false; reason: string };
+
+function noteRepair(feedback: string, attempts: number): RepairState {
+  const nextAttempts = attempts + 1;
+  if (nextAttempts > MAX_REPAIR_ATTEMPTS) {
+    return { ok: false, reason: `model did not provide a usable action after ${attempts} repair attempt(s): ${feedback}` };
+  }
+  return { ok: true, feedback, attempts: nextAttempts };
 }
 
 async function failDiscovery(
@@ -223,6 +277,8 @@ const SYSTEM_PROMPT = [
   "Choose actions only by inventory element id.",
   "Never invent selectors, coordinates, or locator descriptors.",
   "For typing or selecting values, use input names. Never provide raw secret values.",
+  "Do not repeat a completed field entry. If a field already shows the intended value, move to the next field or submit.",
+  "For checkboxes, use kind=check with checked=true or checked=false.",
 ].join("\n");
 
 function renderPrompt(
@@ -230,6 +286,9 @@ function renderPrompt(
   template: CapabilityArtifact,
   observation: Observation,
   redactor: (value: string) => string,
+  actionHistory: readonly string[],
+  repairFeedback: string | null,
+  inputs: Readonly<Record<string, string>>,
 ): string {
   return [
     `Goal: ${goal}`,
@@ -242,9 +301,36 @@ function renderPrompt(
     `Current URL: ${observation.url}`,
     `Title: ${observation.title}`,
     "",
+    "Completed actions:",
+    ...(actionHistory.length > 0 ? actionHistory.slice(-10) : ["- none yet"]),
+    "",
+    "Current input status:",
+    ...inputStatusLines(template, observation, inputs),
+    ...(repairFeedback ? ["", `Correction: ${repairFeedback}`] : []),
+    "",
     "Inventory:",
     ...observation.inventory.map((element) => formatElementForModel(element, redactor)),
   ].join("\n");
+}
+
+function inputStatusLines(
+  template: CapabilityArtifact,
+  observation: Observation,
+  inputs: Readonly<Record<string, string>>,
+): string[] {
+  return Object.entries(template.inputs).map(([name, field]) => {
+    const value = inputs[name];
+    const entered = value !== undefined && observation.inventory.some((element) =>
+      elementHasInputValue(element, value, field.sensitivity === "secret"),
+    );
+    return `- ${name}: ${entered ? "already entered on this screen" : "not visibly entered on this screen"}`;
+  });
+}
+
+function elementHasInputValue(element: InventoryElement, value: string, secret: boolean): boolean {
+  if (element.value === undefined) return false;
+  if (secret) return element.value.length > 0 && /password/i.test(element.name);
+  return element.value === value;
 }
 
 function formatElementForModel(element: InventoryElement, redactor: (value: string) => string): string {
@@ -306,6 +392,53 @@ function validateToolCall(
   }
 
   return null;
+}
+
+function redundantTypeFeedback(
+  call: DiscoveryToolCall,
+  observation: Observation,
+  inputs: Readonly<Record<string, string>>,
+  template: CapabilityArtifact,
+): string | null {
+  if (call.kind !== "type_param" && call.kind !== "select_param") return null;
+  const expected = inputs[call.inputName];
+  if (expected === undefined) return null;
+  const field = template.inputs[call.inputName];
+  const element = observation.inventory.find((candidate) => candidate.id === call.elementId);
+  if (!field || !element) return null;
+  if (!elementHasInputValue(element, expected, field.sensitivity === "secret")) return null;
+  return `Previous action was rejected: ${call.inputName} is already entered in element ${call.elementId}. ` +
+    `Do not type/select it again; choose the next unfinished field or submit button.`;
+}
+
+function historyLine(call: Exclude<DiscoveryToolCall, { kind: "finish" }>, observation: Observation): string {
+  const element = observation.inventory.find((candidate) => candidate.id === call.elementId);
+  const target = element ? `${element.role} ${JSON.stringify(element.name)}` : `element ${call.elementId}`;
+  switch (call.kind) {
+    case "click":
+      return `- clicked ${target}`;
+    case "type_param":
+      return `- typed {${call.inputName}} into ${target}`;
+    case "select_param":
+      return `- selected {${call.inputName}} in ${target}`;
+    case "check":
+      return `- set ${target} checked=${call.checked}`;
+  }
+}
+
+function defaultProviderMinIntervalMs(provider: LLMProvider): number {
+  void provider;
+  return 0;
+}
+
+async function waitForProviderPacing(lastProviderCallAt: number, minIntervalMs: number): Promise<void> {
+  if (lastProviderCallAt === 0 || minIntervalMs <= 0) return;
+  const waitMs = minIntervalMs - (Date.now() - lastProviderCallAt);
+  if (waitMs > 0) await sleep(waitMs);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function evaluateDiscoveryActionPolicy(
